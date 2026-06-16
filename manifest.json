@@ -3,7 +3,7 @@
   "name": "Rapid Lister Pro",
   "version": "2.0.0",
   "description": "AI Auto Publish for Facebook Marketplace - Batch Listing Tool",
-  "permissions": ["storage", "activeTab", "scripting", "tabs", "alarms"],
+  "permissions": ["storage", "activeTab", "scripting", "tabs", "alarms", "unlimitedStorage"],
   "host_permissions": ["https://www.facebook.com/*"],
   "action": {
     "default_popup": "popup.html",

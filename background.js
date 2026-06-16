@@ -48,7 +48,11 @@ async function startBulkListing(data) {
   state.activeJob = true;
   state.totalToCreate = parseInt(data.numListings) || 1;
   state.createdCount = 0;
-  state.listingsData = data;
+  
+  // Strip images from background state to prevent QuotaExceededError in chrome.storage.local
+  const { images, ...textData } = data;
+  state.listingsData = textData;
+  
   state.currentBatchTabs = [];
   state.completedTabs = 0;
   state.currentBatchIndex = 0;

@@ -18,7 +18,7 @@ function typeIntoField(element, text) {
 }
 
 async function uploadPhoto(base64Image, filename) {
-  const fileInput = document.querySelector('input[type="file"][multiple]') || document.querySelector('input[type="file"]');
+  const fileInput = await waitForElement(() => document.querySelector('input[type="file"][multiple]') || document.querySelector('input[type="file"]'));
   if (!fileInput) throw new Error("File input not found");
   const res = await fetch(base64Image);
   const blob = await res.blob();
@@ -455,9 +455,13 @@ async function init() {
 
   if (url.includes("/marketplace/create/item")) {
     // Check if we have active autofill data
-    chrome.runtime.sendMessage({ action: "GET_MY_PENDING_DATA" }, (res) => {
+    chrome.runtime.sendMessage({ action: "GET_MY_PENDING_DATA" }, async (res) => {
       if (res && res.data) {
-        runPhase1(res.data);
+        // Retrieve the images from draftListing to save space in queue storage
+        const storage = await chrome.storage.local.get("draftListing");
+        const images = (storage.draftListing && storage.draftListing.images) || [];
+        const fullData = { ...res.data, images };
+        runPhase1(fullData);
       }
     });
   } else if (url.includes("/marketplace/you/selling")) {
