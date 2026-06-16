@@ -174,58 +174,60 @@ async function runPhase1(data) {
     if (locInput && data.location) {
       locInput.focus();
       locInput.select();
+      await sleep(300);
       
-      // Clear value and dispatch input event
+      // Clear field value
       locInput.value = '';
       locInput.dispatchEvent(new Event('input', { bubbles: true }));
-      await sleep(1000);
+      await sleep(500);
+
+      // Type character by character to trigger suggestions properly
+      for (const char of String(data.location)) {
+        locInput.value += char;
+        locInput.dispatchEvent(new InputEvent('input', { bubbles: true, data: char, inputType: 'insertText' }));
+        locInput.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: char }));
+        locInput.dispatchEvent(new KeyboardEvent('keypress', { bubbles: true, key: char }));
+        locInput.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: char }));
+        await sleep(100);
+      }
       
-      // Type location to trigger suggestions
-      typeIntoField(locInput, data.location);
-      await sleep(3000); // Wait 3 seconds for suggestions to load
-      
-      // Let's also dispatch keyup/keydown to ensure React/FB updates suggestions
-      locInput.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'a', keyCode: 65 }));
-      locInput.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'a', keyCode: 65 }));
-      await sleep(1000);
+      await sleep(4000); // Wait 4 seconds for suggestions to load
       
       // Find and click the autocomplete suggestion
       let suggestion = null;
-      // Look for options in lists, role="option", or listbox divs
-      const options = [...document.querySelectorAll('[role="option"], [role="listbox"] div, ul li, [id^="dir-autocomplete"] li, div[role="button"] span')];
+      // Look for options in lists, role="option", listbox divs, autocomplete IDs, or span elements
+      const options = [...document.querySelectorAll('[role="option"], [role="listbox"] div, ul li, [id^="dir-autocomplete"] li, div[role="button"] span, div[role="presentation"] div')];
       
       suggestion = options.find(el => 
         el.textContent.trim().toLowerCase().includes(data.location.toLowerCase())
       );
       
       if (!suggestion && options.length > 0) {
-        // Find any option that has text content with city/state pattern
+        // Find any option that has text content with city/state comma pattern
         suggestion = options.find(el => el.textContent.trim().length > 0 && el.textContent.includes(','));
         if (!suggestion) {
-          suggestion = options[0]; // fallback to first option
+          suggestion = options.find(el => el.textContent.trim().length > 0 && !el.textContent.toLowerCase().includes("location"));
         }
       }
       
       if (suggestion) {
         console.log("Found location suggestion, clicking:", suggestion.textContent);
-        // Dispatch mouse down, click, and mouse up to simulate a real click
-        suggestion.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+        // Direct click, mouse events, and pointer events to guarantee selection
+        suggestion.scrollIntoView({ block: 'nearest' });
+        await sleep(300);
+        suggestion.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+        suggestion.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
         suggestion.click();
-        suggestion.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+        suggestion.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
+        suggestion.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
         await sleep(2000); // Wait for Facebook UI update
       } else {
         console.warn("Could not find any location suggestions in the DOM");
-        // Try clicking on the first element inside any container that popped up
-        const popupList = document.querySelector('[role="listbox"], [role="menu"]');
-        if (popupList) {
-          const firstItem = popupList.querySelector('div, li, [role="option"]');
-          if (firstItem) {
-            console.log("Clicking first item in popup container:", firstItem.textContent);
-            firstItem.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-            firstItem.click();
-            await sleep(2000);
-          }
-        }
+        // Fallback: Press Down Arrow and Enter keys to select first item if present
+        locInput.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowDown', keyCode: 40 }));
+        await sleep(500);
+        locInput.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter', keyCode: 13 }));
+        await sleep(2000);
       }
     }
 
@@ -263,9 +265,10 @@ function injectPublishBox() {
   const box = document.createElement("div");
   box.id = "rapid-lister-publish-box";
   box.style.position = "fixed";
-  box.style.top = "80px";
-  box.style.right = "20px";
-  box.style.width = "320px";
+  box.style.top = "50%";
+  box.style.left = "50%";
+  box.style.transform = "translate(-50%, -50%)";
+  box.style.width = "340px";
   box.style.background = "linear-gradient(135deg, #0f0f18, #1a1a2e)";
   box.style.border = "2px solid #06b6d4";
   box.style.borderRadius = "16px";
@@ -273,7 +276,7 @@ function injectPublishBox() {
   box.style.zIndex = "999999";
   box.style.color = "#f8fafc";
   box.style.fontFamily = "system-ui, -apple-system, sans-serif";
-  box.style.boxShadow = "0 8px 32px rgba(0, 0, 0, 0.5), 0 0 15px rgba(6, 182, 212, 0.2)";
+  box.style.boxShadow = "0 20px 50px rgba(0, 0, 0, 0.7), 0 0 30px rgba(6, 182, 212, 0.4)";
 
   box.innerHTML = `
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
