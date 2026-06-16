@@ -94,6 +94,10 @@ function findFieldByLabel(labelText, tagName = 'input') {
 async function runPhase1(data) {
   console.log("Rapid Lister Pro: Starting autofill sequence...", data);
   try {
+    // BATCH SETUP: Check if this is part of a batch
+    if (data.batchIndex !== undefined) {
+      console.log(`[BATCH] Processing listing ${data.batchIndex + 1}/${data.totalCount}`);
+    }
     // 1. PHOTO UPLOAD (FIRST) - Uploads exactly ONE photo, rotating from the images list
     console.log("Step 1: Uploading Photos");
     if (data.images && data.images.length > 0) {
@@ -195,7 +199,22 @@ async function runPhase1(data) {
 
     // 12. Signal background to close/redirect tab
     await sleep(3000);
-    chrome.runtime.sendMessage({ action: "DRAFT_SAVED" });
+
+    // CHECK IF BATCH CONTINUES
+    chrome.storage.local.get(['batchConfig'], async (res) => {
+      const batch = res.batchConfig;
+      if (batch && batch.currentIndex < batch.totalCount) {
+        // More listings to process - navigate to create new item
+        batch.currentIndex++;
+        await chrome.storage.local.set({ batchConfig: batch });
+        console.log(`[BATCH] Continuing to listing ${batch.currentIndex}/${batch.totalCount}`);
+        window.location.href = 'https://www.facebook.com/marketplace/create/item';
+      } else {
+        // Batch complete - close tab
+        console.log("[BATCH] All listings done! Closing tab...");
+        chrome.runtime.sendMessage({ action: "DRAFT_SAVED" });
+      }
+    });
 
   } catch (error) {
     console.error("Autofill process failed:", error);
@@ -222,97 +241,28 @@ async function setLocation(location) {
 
   // Step 2: Click and focus
   locInput.click();
-  await sleep(500);
+  await sleep(300);
   locInput.focus();
   await sleep(300);
 
-  // Step 3: Clear existing value using React setter
+  // Step 3: Clear existing value
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
   setter.call(locInput, '');
   locInput.dispatchEvent(new Event('input', { bubbles: true }));
   await sleep(300);
 
-  // Step 4: Type the location using React-compatible setter
+  // Step 4: Type using React-compatible setter
   typeIntoField(locInput, location);
-  console.log("[LOCATION] Typed:", location);
+  await sleep(4000); // CRITICAL: wait for Facebook network request
 
-  // CRITICAL: Wait for Facebook to fetch suggestions (network request)
-  await sleep(2500);
+  // Step 5: Select using keyboard ArrowDown + Enter (the only method React honors because clicks have isTrusted=false)
+  locInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, bubbles: true }));
+  await sleep(600);
+  locInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+  await sleep(600);
+  locInput.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+  await sleep(1500);
 
-  // Step 5: Try to find and click the FIRST dropdown suggestion
-  let optionSelected = false;
-
-  // Strategy 1: Find role="option" elements
-  const options = [...document.querySelectorAll('[role="option"]')];
-  if (options.length > 0) {
-    const firstOption = options[0];
-    console.log("[LOCATION] Found option via role:", firstOption.textContent.trim());
-
-    // Scroll into view and click
-    firstOption.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    await sleep(300);
-
-    // Multiple click attempts
-    firstOption.click();
-    firstOption.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-    firstOption.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-    firstOption.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-
-    optionSelected = true;
-    console.log("[LOCATION] Clicked option via role");
-  }
-
-  // Strategy 2: If role didn't work, try listbox children
-  if (!optionSelected) {
-    const listbox = document.querySelector('[role="listbox"]');
-    if (listbox) {
-      const items = listbox.querySelectorAll('div, span, li');
-      for (const item of items) {
-        if (item.children.length === 0 && item.textContent.trim().length > 2) {
-          console.log("[LOCATION] Found option via listbox:", item.textContent.trim());
-          item.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-          await sleep(300);
-          item.click();
-          item.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-          optionSelected = true;
-          console.log("[LOCATION] Clicked option via listbox");
-          break;
-        }
-      }
-    }
-  }
-
-  // Strategy 3: If still not selected, use keyboard navigation
-  if (!optionSelected) {
-    console.log("[LOCATION] Click failed, using keyboard fallback...");
-
-    // Re-focus the input
-    locInput.focus();
-    await sleep(200);
-
-    // Press ArrowDown to highlight first suggestion
-    locInput.dispatchEvent(new KeyboardEvent('keydown', { 
-      key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, bubbles: true, cancelable: true 
-    }));
-    await sleep(600);
-
-    // Press Enter to select
-    locInput.dispatchEvent(new KeyboardEvent('keydown', { 
-      key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true, cancelable: true 
-    }));
-    await sleep(200);
-    locInput.dispatchEvent(new KeyboardEvent('keyup', { 
-      key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true, cancelable: true 
-    }));
-    await sleep(200);
-    locInput.dispatchEvent(new KeyboardEvent('keypress', { 
-      key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true, cancelable: true 
-    }));
-
-    console.log("[LOCATION] Used keyboard fallback");
-  }
-
-  await sleep(1500); // Final wait for Facebook to process
   console.log("[LOCATION] Done");
   return true;
 }
