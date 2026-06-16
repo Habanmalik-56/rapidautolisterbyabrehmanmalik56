@@ -172,16 +172,7 @@ async function runPhase1(data) {
     if (data.location) {
       console.log("Step 10: Setting location...");
       await sleep(500);
-
-      // Try primary method first
-      let locationSet = await setLocation(data.location);
-
-      // If primary fails, try keyboard method
-      if (!locationSet) {
-        console.log("Primary failed, trying keyboard...");
-        locationSet = await setLocationWithKeyboard(data.location);
-      }
-
+      await setLocation(data.location);
       await sleep(1000);
     }
 
@@ -211,7 +202,7 @@ async function runPhase1(data) {
   }
 }
 
-// Location Setter Function (COMPLETE)
+// Location Setter Function (COMPLETE - Keyboard Only Strategy for React/isTrusted)
 async function setLocation(location) {
   console.log("[LOCATION] Setting:", location);
 
@@ -229,142 +220,31 @@ async function setLocation(location) {
     return false;
   }
 
-  // Step 2: Click to focus
+  // Step 2: Click and focus
   locInput.click();
-  await sleep(500);
+  await sleep(300);
   locInput.focus();
   await sleep(300);
 
-  // Step 3: Clear existing value (CRITICAL)
-  locInput.value = '';
+  // Step 3: Clear existing value
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+  setter.call(locInput, '');
   locInput.dispatchEvent(new Event('input', { bubbles: true }));
-  locInput.dispatchEvent(new Event('change', { bubbles: true }));
   await sleep(300);
 
-  // Step 4: Type the location using React-compatible setter
-  const nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-  nativeSetter.call(locInput, location);
+  // Step 4: Type using React-compatible setter
+  typeIntoField(locInput, location);
+  await sleep(4000); // CRITICAL: wait for Facebook network request
 
-  // Step 5: Dispatch ALL necessary events (CRITICAL for React)
-  locInput.dispatchEvent(new Event('focus', { bubbles: true }));
-  locInput.dispatchEvent(new Event('input', { bubbles: true }));
-  locInput.dispatchEvent(new InputEvent('input', { bubbles: true, data: location, inputType: 'insertText' }));
-  locInput.dispatchEvent(new Event('keyup', { bubbles: true }));
-  locInput.dispatchEvent(new Event('change', { bubbles: true }));
-
-  console.log("[LOCATION] Typed:", location);
-  await sleep(2000); // Wait for dropdown to appear
-
-  // Step 6: Find and click the FIRST dropdown suggestion (CRITICAL FIX)
-  const selectFirstOption = async () => {
-    // Try multiple selector strategies
-    const strategies = [
-      // Strategy 1: role="option" with span
-      () => [...document.querySelectorAll('[role="option"]')].find(el => 
-        el.textContent.trim().length > 0 && el.offsetParent !== null),
-
-      // Strategy 2: Listbox items
-      () => [...document.querySelectorAll('[role="listbox"] [role="option"]')].find(el =>
-        el.offsetParent !== null),
-
-      // Strategy 3: Any clickable item with location-like text
-      () => [...document.querySelectorAll('div, span, li')].find(el => {
-        const text = el.textContent.trim().toLowerCase();
-        return el.children.length === 0 && 
-               text.length > 3 && 
-               text.length < 50 &&
-               (text.includes('new york') || text.includes('los angeles') || 
-                text.includes(location.toLowerCase().split(',')[0])) &&
-               el.offsetParent !== null;
-      }),
-
-      // Strategy 4: Any element in dropdown container
-      () => {
-        const containers = document.querySelectorAll('[role="listbox"], [role="dialog"], ul');
-        for (const container of containers) {
-          const items = container.querySelectorAll('div, span, li');
-          for (const item of items) {
-            if (item.children.length === 0 && item.textContent.trim().length > 2) {
-              return item;
-            }
-          }
-        }
-        return null;
-      }
-    ];
-
-    for (let i = 0; i < strategies.length; i++) {
-      const option = strategies[i]();
-      if (option) {
-        console.log(`[LOCATION] Strategy ${i+1} found option:`, option.textContent.trim());
-
-        // Scroll into view
-        option.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-        await sleep(300);
-
-        // Click with multiple methods
-        option.click();
-        option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-        option.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-        option.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-
-        console.log("[LOCATION] Option selected!");
-        return true;
-      }
-    }
-
-    return false;
-  };
-
-  const selected = await selectFirstOption();
-
-  if (!selected) {
-    console.error("[LOCATION] Could not select option!");
-    // Fallback: press Enter key
-    locInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
-    locInput.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
-    await sleep(1000);
-  }
-
-  await sleep(1000); // Final wait
-  return true;
-}
-
-// Alternative: Keyboard Navigation Method (if click fails)
-async function setLocationWithKeyboard(location) {
-  const locInput = await waitForElement(() => 
-    document.querySelector('input[aria-label="Location"]') ||
-    document.querySelector('input[placeholder*="location" i]')
-  , 10000);
-
-  if (!locInput) return false;
-
-  // Focus and type
-  locInput.click();
-  await sleep(500);
-  locInput.focus();
-
-  // Clear and type
-  locInput.value = '';
-  locInput.dispatchEvent(new Event('input', { bubbles: true }));
-  await sleep(200);
-
-  const nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-  nativeSetter.call(locInput, location);
-  locInput.dispatchEvent(new Event('input', { bubbles: true }));
-  await sleep(2000); // Wait for dropdown
-
-  // Press Down arrow to highlight first option
+  // Step 5: Select using keyboard ArrowDown + Enter (the only method React honors because clicks have isTrusted=false)
   locInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, bubbles: true }));
-  await sleep(500);
-
-  // Press Enter to select
+  await sleep(600);
   locInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
-  await sleep(500);
+  await sleep(600);
   locInput.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
-  await sleep(1000);
+  await sleep(1500);
 
-  console.log("[LOCATION] Selected via keyboard");
+  console.log("[LOCATION] Done");
   return true;
 }
 
