@@ -222,28 +222,97 @@ async function setLocation(location) {
 
   // Step 2: Click and focus
   locInput.click();
-  await sleep(300);
+  await sleep(500);
   locInput.focus();
   await sleep(300);
 
-  // Step 3: Clear existing value
+  // Step 3: Clear existing value using React setter
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
   setter.call(locInput, '');
   locInput.dispatchEvent(new Event('input', { bubbles: true }));
   await sleep(300);
 
-  // Step 4: Type using React-compatible setter
+  // Step 4: Type the location using React-compatible setter
   typeIntoField(locInput, location);
-  await sleep(4000); // CRITICAL: wait for Facebook network request
+  console.log("[LOCATION] Typed:", location);
 
-  // Step 5: Select using keyboard ArrowDown + Enter (the only method React honors because clicks have isTrusted=false)
-  locInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, bubbles: true }));
-  await sleep(600);
-  locInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
-  await sleep(600);
-  locInput.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
-  await sleep(1500);
+  // CRITICAL: Wait for Facebook to fetch suggestions (network request)
+  await sleep(2500);
 
+  // Step 5: Try to find and click the FIRST dropdown suggestion
+  let optionSelected = false;
+
+  // Strategy 1: Find role="option" elements
+  const options = [...document.querySelectorAll('[role="option"]')];
+  if (options.length > 0) {
+    const firstOption = options[0];
+    console.log("[LOCATION] Found option via role:", firstOption.textContent.trim());
+
+    // Scroll into view and click
+    firstOption.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    await sleep(300);
+
+    // Multiple click attempts
+    firstOption.click();
+    firstOption.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    firstOption.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    firstOption.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+
+    optionSelected = true;
+    console.log("[LOCATION] Clicked option via role");
+  }
+
+  // Strategy 2: If role didn't work, try listbox children
+  if (!optionSelected) {
+    const listbox = document.querySelector('[role="listbox"]');
+    if (listbox) {
+      const items = listbox.querySelectorAll('div, span, li');
+      for (const item of items) {
+        if (item.children.length === 0 && item.textContent.trim().length > 2) {
+          console.log("[LOCATION] Found option via listbox:", item.textContent.trim());
+          item.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+          await sleep(300);
+          item.click();
+          item.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+          optionSelected = true;
+          console.log("[LOCATION] Clicked option via listbox");
+          break;
+        }
+      }
+    }
+  }
+
+  // Strategy 3: If still not selected, use keyboard navigation
+  if (!optionSelected) {
+    console.log("[LOCATION] Click failed, using keyboard fallback...");
+
+    // Re-focus the input
+    locInput.focus();
+    await sleep(200);
+
+    // Press ArrowDown to highlight first suggestion
+    locInput.dispatchEvent(new KeyboardEvent('keydown', { 
+      key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, bubbles: true, cancelable: true 
+    }));
+    await sleep(600);
+
+    // Press Enter to select
+    locInput.dispatchEvent(new KeyboardEvent('keydown', { 
+      key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true, cancelable: true 
+    }));
+    await sleep(200);
+    locInput.dispatchEvent(new KeyboardEvent('keyup', { 
+      key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true, cancelable: true 
+    }));
+    await sleep(200);
+    locInput.dispatchEvent(new KeyboardEvent('keypress', { 
+      key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true, cancelable: true 
+    }));
+
+    console.log("[LOCATION] Used keyboard fallback");
+  }
+
+  await sleep(1500); // Final wait for Facebook to process
   console.log("[LOCATION] Done");
   return true;
 }
