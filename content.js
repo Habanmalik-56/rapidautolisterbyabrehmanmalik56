@@ -168,6 +168,49 @@ async function runPhase1(data) {
       }
     }
 
+    // 10. LOCATION
+    if (data.location) {
+      console.log("Step 10: Setting location...");
+      await sleep(500);
+
+      // Try primary method first
+      let locationSet = await setLocation(data.location);
+
+      // If primary fails, try keyboard method
+      if (!locationSet) {
+        console.log("Primary failed, trying keyboard...");
+        locationSet = await setLocationWithKeyboard(data.location);
+      }
+
+      await sleep(1000);
+    }
+
+    // 11. SAVE DRAFT (LAST)
+    console.log("Step 11: Saving Draft");
+    const saveDraftBtn = [...document.querySelectorAll('div[role="button"], span')]
+      .find(el => el.textContent.toLowerCase() === 'save draft' || el.textContent.toLowerCase() === 'save as draft');
+    
+    if (saveDraftBtn) {
+      saveDraftBtn.click();
+    } else {
+      const fallbackBtn = [...document.querySelectorAll('div[role="button"]')]
+        .find(el => el.textContent.toLowerCase().includes('draft'));
+      if (fallbackBtn) {
+        fallbackBtn.click();
+      } else {
+        throw new Error("Save Draft button not found");
+      }
+    }
+
+    // 12. Signal background to close/redirect tab
+    await sleep(3000);
+    chrome.runtime.sendMessage({ action: "DRAFT_SAVED" });
+
+  } catch (error) {
+    console.error("Autofill process failed:", error);
+  }
+}
+
 // Location Setter Function (COMPLETE)
 async function setLocation(location) {
   console.log("[LOCATION] Setting:", location);
@@ -323,128 +366,6 @@ async function setLocationWithKeyboard(location) {
 
   console.log("[LOCATION] Selected via keyboard");
   return true;
-}
-
-// RUN FILL SYSTEM (PHASE 1)
-async function runPhase1(data) {
-  console.log("Rapid Lister Pro: Starting autofill sequence...", data);
-  try {
-    // 1. PHOTO UPLOAD (FIRST) - Uploads exactly ONE photo, rotating from the images list
-    console.log("Step 1: Uploading Photos");
-    if (data.images && data.images.length > 0) {
-      const imgIdx = (data.listingIndex || 0) % data.images.length;
-      await uploadPhoto(data.images[imgIdx], `photo_${imgIdx}.jpg`);
-    } else {
-      console.warn("No photos provided for listing");
-    }
-
-    // 2. TITLE
-    console.log("Step 2: Filling Title");
-    const titleInput = await waitForElement(() => findFieldByLabel("Title", "input") || document.querySelector('input[type="text"][maxlength="100"]'));
-    typeIntoField(titleInput, data.title);
-    await sleep(500);
-
-    // 3. PRICE
-    console.log("Step 3: Filling Price");
-    const priceInput = findFieldByLabel("Price", "input") || document.querySelector('input[type="text"][inputmode="numeric"]');
-    typeIntoField(priceInput, data.price);
-    await sleep(500);
-
-    // 4. CATEGORY
-    console.log("Step 4: Selecting Category");
-    const categoryDrop = findFieldByLabel("Category", "div") || document.querySelector('[aria-label="Category"]');
-    if (categoryDrop && data.category) {
-      await selectDropdownOption(categoryDrop, data.category);
-    }
-
-    // 5. CONDITION
-    console.log("Step 5: Selecting Condition");
-    const conditionDrop = findFieldByLabel("Condition", "div") || document.querySelector('[aria-label="Condition"]');
-    if (conditionDrop && data.condition) {
-      await selectDropdownOption(conditionDrop, data.condition);
-    }
-
-    // 6. DESCRIPTION
-    console.log("Step 6: Filling Description");
-    const descTextarea = findFieldByLabel("Description", "textarea") || document.querySelector('textarea[aria-label="Description"]');
-    if (descTextarea) {
-      typeIntoField(descTextarea, data.description);
-      await sleep(500);
-    }
-
-    // 7. AVAILABILITY
-    console.log("Step 7: Selecting Availability");
-    const availDrop = findFieldByLabel("Availability", "div") || document.querySelector('[aria-label="Availability"]');
-    if (availDrop && data.availability) {
-      await selectDropdownOption(availDrop, data.availability);
-    }
-
-    // 8. PRODUCT TAGS
-    console.log("Step 8: Adding Product Tags");
-    const tagsInput = findFieldByLabel("Product tags", "textarea") || findFieldByLabel("Tags", "input") || document.querySelector('[aria-label="Product tags"] textarea');
-    if (tagsInput && data.tags) {
-      const tags = data.tags.split(',').map(t => t.trim()).filter(Boolean);
-      for (const tag of tags) {
-        typeIntoField(tagsInput, tag);
-        await sleep(300);
-        // Press Enter to submit the tag
-        tagsInput.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Enter', code: 'Enter', keyCode: 13 }));
-        await sleep(300);
-      }
-    }
-
-    // 9. QUANTITY (if > 1 and single item not chosen)
-    if (data.quantity && parseInt(data.quantity) > 1) {
-      console.log("Step 9: Filling Quantity");
-      const qtyInput = findFieldByLabel("Quantity", "input") || document.querySelector('[aria-label="Quantity"]');
-      if (qtyInput) {
-        typeIntoField(qtyInput, data.quantity);
-        await sleep(500);
-      }
-    }
-
-    // 10. LOCATION
-    if (data.location) {
-      console.log("Step 10: Setting location...");
-      await sleep(500);
-
-      // Try primary method first
-      let locationSet = await setLocation(data.location);
-
-      // If primary fails, try keyboard method
-      if (!locationSet) {
-        console.log("Primary failed, trying keyboard...");
-        locationSet = await setLocationWithKeyboard(data.location);
-      }
-
-      await sleep(1000);
-    }
-
-    // 11. SAVE DRAFT (LAST)
-    console.log("Step 11: Saving Draft");
-    const saveDraftBtn = [...document.querySelectorAll('div[role="button"], span')]
-      .find(el => el.textContent.toLowerCase() === 'save draft' || el.textContent.toLowerCase() === 'save as draft');
-    
-    if (saveDraftBtn) {
-      saveDraftBtn.click();
-    } else {
-      // Try searching for any buttons containing draft
-      const fallbackBtn = [...document.querySelectorAll('div[role="button"]')]
-        .find(el => el.textContent.toLowerCase().includes('draft'));
-      if (fallbackBtn) {
-        fallbackBtn.click();
-      } else {
-        throw new Error("Save Draft button not found");
-      }
-    }
-
-    // 12. CLOSE TAB (handled by background after message)
-    await sleep(3000);
-    chrome.runtime.sendMessage({ action: "DRAFT_SAVED" });
-
-  } catch (error) {
-    console.error("Autofill process failed:", error);
-  }
 }
 
 // AUTO PUBLISH SYSTEM (PHASE 2)
