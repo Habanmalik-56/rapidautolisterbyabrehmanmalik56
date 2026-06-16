@@ -174,59 +174,71 @@ async function runPhase1(data) {
     if (locInput && data.location) {
       locInput.focus();
       locInput.select();
-      await sleep(300);
+      await sleep(500);
       
-      // Clear field value
+      // Clear input and send events
       locInput.value = '';
       locInput.dispatchEvent(new Event('input', { bubbles: true }));
-      await sleep(500);
+      await sleep(800);
 
-      // Type character by character to trigger suggestions properly
-      for (const char of String(data.location)) {
-        locInput.value += char;
-        locInput.dispatchEvent(new InputEvent('input', { bubbles: true, data: char, inputType: 'insertText' }));
-        locInput.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: char }));
-        locInput.dispatchEvent(new KeyboardEvent('keypress', { bubbles: true, key: char }));
-        locInput.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: char }));
-        await sleep(100);
-      }
-      
-      await sleep(4000); // Wait 4 seconds for suggestions to load
-      
-      // Find and click the autocomplete suggestion
+      // Simulate typing text
+      typeIntoField(locInput, data.location);
+      await sleep(4000); // CRITICAL: Wait 4 seconds for Facebook's async network request
+
+      // Find the suggestion container and options
       let suggestion = null;
-      // Look for options in lists, role="option", listbox divs, autocomplete IDs, or span elements
-      const options = [...document.querySelectorAll('[role="option"], [role="listbox"] div, ul li, [id^="dir-autocomplete"] li, div[role="button"] span, div[role="presentation"] div')];
       
-      suggestion = options.find(el => 
-        el.textContent.trim().toLowerCase().includes(data.location.toLowerCase())
-      );
-      
-      if (!suggestion && options.length > 0) {
-        // Find any option that has text content with city/state comma pattern
-        suggestion = options.find(el => el.textContent.trim().length > 0 && el.textContent.includes(','));
-        if (!suggestion) {
-          suggestion = options.find(el => el.textContent.trim().length > 0 && !el.textContent.toLowerCase().includes("location"));
-        }
+      // Look in the DOM for potential suggestion list item elements
+      const options = [...document.querySelectorAll('[role="option"], ul li, div[role="presentation"] div, [id^="dir-autocomplete"] li')]
+        .filter(el => el.textContent.trim().length > 0 && !el.textContent.toLowerCase().includes("location"));
+
+      // 1. Try finding by matching state/city text content
+      const searchStr = data.location.split(',')[0].trim().toLowerCase(); // e.g. "los angeles"
+      suggestion = options.find(el => {
+        const text = el.textContent.toLowerCase();
+        return text.includes(searchStr) && (text.includes("california") || text.includes("ca") || text.includes("city") || text.includes("united states") || text.includes(",") || text.includes("county") || text.includes("state"));
+      });
+
+      // 2. Fallback to any element containing the city text
+      if (!suggestion) {
+        suggestion = options.find(el => el.textContent.toLowerCase().includes(searchStr));
       }
-      
+
+      // 3. Fallback to first text-containing sibling or option in listbox
+      if (!suggestion && options.length > 0) {
+        suggestion = options[0];
+      }
+
       if (suggestion) {
-        console.log("Found location suggestion, clicking:", suggestion.textContent);
-        // Direct click, mouse events, and pointer events to guarantee selection
-        suggestion.scrollIntoView({ block: 'nearest' });
-        await sleep(300);
-        suggestion.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
-        suggestion.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-        suggestion.click();
-        suggestion.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
-        suggestion.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-        await sleep(2000); // Wait for Facebook UI update
+        console.log("Clicking location suggestion element:", suggestion.textContent);
+        
+        // Simulating the exact event sequence Facebook expects: mouseenter -> mouseover -> mousedown -> click -> mouseup
+        const events = ['mouseenter', 'mouseover', 'mousedown', 'click', 'mouseup'];
+        for (const evName of events) {
+          const ev = new MouseEvent(evName, {
+            bubbles: true,
+            cancelable: true,
+            view: window,
+            buttons: 1
+          });
+          suggestion.dispatchEvent(ev);
+          await sleep(100);
+        }
+        
+        await sleep(2000);
       } else {
-        console.warn("Could not find any location suggestions in the DOM");
-        // Fallback: Press Down Arrow and Enter keys to select first item if present
-        locInput.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowDown', keyCode: 40 }));
+        console.warn("Could not locate dropdown suggestion item in DOM. Simulating Arrow Down + Enter keys.");
+        
+        // Fire Arrow Down key event
+        locInput.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowDown', code: 'ArrowDown', keyCode: 40 }));
         await sleep(500);
-        locInput.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter', keyCode: 13 }));
+        locInput.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'ArrowDown', code: 'ArrowDown', keyCode: 40 }));
+        await sleep(800);
+
+        // Fire Enter key event to submit
+        locInput.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter', code: 'Enter', keyCode: 13 }));
+        await sleep(500);
+        locInput.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Enter', code: 'Enter', keyCode: 13 }));
         await sleep(2000);
       }
     }
