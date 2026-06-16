@@ -168,129 +168,256 @@ async function runPhase1(data) {
       }
     }
 
-    // 10. LOCATION
-    console.log("Step 10: Setting Location");
-    const locInput = findFieldByLabel("Location", "input") || document.querySelector('[aria-label="Location"]');
-    if (locInput && data.location) {
-      locInput.focus();
-      locInput.select();
-      await sleep(500);
-      
-      // Clear input and send events
-      locInput.value = '';
-      locInput.dispatchEvent(new Event('input', { bubbles: true }));
-      await sleep(800);
+// Location Setter Function (COMPLETE)
+async function setLocation(location) {
+  console.log("[LOCATION] Setting:", location);
 
-      // Simulate typing text
-      typeIntoField(locInput, data.location);
-      await sleep(4000); // Wait 4 seconds for Facebook's async network request
+  // Step 1: Find the location input
+  const locInput = await waitForElement(() => {
+    return document.querySelector('input[aria-label="Location"]') ||
+           document.querySelector('input[placeholder*="location" i]') ||
+           document.querySelector('input[placeholder*="city" i]') ||
+           [...document.querySelectorAll('input')].find(el => 
+             /location|city|zip/i.test(el.getAttribute('aria-label') || el.placeholder || ''));
+  }, 10000);
 
-      // Let's search specifically for the open suggestions container overlay in Facebook's DOM
-      const popups = document.querySelectorAll('div[role="listbox"], ul[role="listbox"], [role="presentation"] div');
-      let suggestion = null;
-      
-      // Look inside active listbox or popup elements
-      for (const popup of popups) {
-        // Find elements with text or list items that don't say "location"
-        const items = [...popup.querySelectorAll('div, li, [role="option"]')].filter(el => {
-          return el.textContent.trim().length > 0 && 
-                 el.children.length <= 2 && // Suggestions are usually simple text leaves
-                 !el.textContent.toLowerCase().includes("location");
-        });
-        
-        const searchStr = data.location.split(',')[0].trim().toLowerCase(); // "los angeles"
-        suggestion = items.find(el => el.textContent.toLowerCase().includes(searchStr));
-        if (suggestion) break;
-      }
+  if (!locInput) {
+    console.error("[LOCATION] Input not found!");
+    return false;
+  }
 
-      // If not found inside listboxes, search globally in role="option" or visible dropdown overlays
-      if (!suggestion) {
-        const globalOptions = [...document.querySelectorAll('[role="option"], ul li, [id^="dir-autocomplete"] li')]
-          .filter(el => el.textContent.trim().length > 0 && !el.textContent.toLowerCase().includes("location"));
-        
-        const searchStr = data.location.split(',')[0].trim().toLowerCase();
-        suggestion = globalOptions.find(el => el.textContent.toLowerCase().includes(searchStr));
-      }
+  // Step 2: Click to focus
+  locInput.click();
+  await sleep(500);
+  locInput.focus();
+  await sleep(300);
 
-      if (suggestion) {
-        console.log("Clicking location suggestion element:", suggestion.textContent);
-        
-        // Use coordinates to simulate a real physical click on the element
-        const rect = suggestion.getBoundingClientRect();
-        const clientX = rect.left + rect.width / 2;
-        const clientY = rect.top + rect.height / 2;
+  // Step 3: Clear existing value (CRITICAL)
+  locInput.value = '';
+  locInput.dispatchEvent(new Event('input', { bubbles: true }));
+  locInput.dispatchEvent(new Event('change', { bubbles: true }));
+  await sleep(300);
 
-        const pointerDown = new PointerEvent('pointerdown', {
-          bubbles: true,
-          cancelable: true,
-          clientX,
-          clientY,
-          pointerType: 'mouse',
-          isPrimary: true
-        });
-        suggestion.dispatchEvent(pointerDown);
+  // Step 4: Type the location using React-compatible setter
+  const nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+  nativeSetter.call(locInput, location);
 
-        const mouseDown = new MouseEvent('mousedown', {
-          bubbles: true,
-          cancelable: true,
-          clientX,
-          clientY,
-          view: window,
-          buttons: 1
-        });
-        suggestion.dispatchEvent(mouseDown);
-        
-        // Focus the element to make sure browser acts on it
-        if (typeof suggestion.focus === 'function') {
-          suggestion.focus();
+  // Step 5: Dispatch ALL necessary events (CRITICAL for React)
+  locInput.dispatchEvent(new Event('focus', { bubbles: true }));
+  locInput.dispatchEvent(new Event('input', { bubbles: true }));
+  locInput.dispatchEvent(new InputEvent('input', { bubbles: true, data: location, inputType: 'insertText' }));
+  locInput.dispatchEvent(new Event('keyup', { bubbles: true }));
+  locInput.dispatchEvent(new Event('change', { bubbles: true }));
+
+  console.log("[LOCATION] Typed:", location);
+  await sleep(2000); // Wait for dropdown to appear
+
+  // Step 6: Find and click the FIRST dropdown suggestion (CRITICAL FIX)
+  const selectFirstOption = async () => {
+    // Try multiple selector strategies
+    const strategies = [
+      // Strategy 1: role="option" with span
+      () => [...document.querySelectorAll('[role="option"]')].find(el => 
+        el.textContent.trim().length > 0 && el.offsetParent !== null),
+
+      // Strategy 2: Listbox items
+      () => [...document.querySelectorAll('[role="listbox"] [role="option"]')].find(el =>
+        el.offsetParent !== null),
+
+      // Strategy 3: Any clickable item with location-like text
+      () => [...document.querySelectorAll('div, span, li')].find(el => {
+        const text = el.textContent.trim().toLowerCase();
+        return el.children.length === 0 && 
+               text.length > 3 && 
+               text.length < 50 &&
+               (text.includes('new york') || text.includes('los angeles') || 
+                text.includes(location.toLowerCase().split(',')[0])) &&
+               el.offsetParent !== null;
+      }),
+
+      // Strategy 4: Any element in dropdown container
+      () => {
+        const containers = document.querySelectorAll('[role="listbox"], [role="dialog"], ul');
+        for (const container of containers) {
+          const items = container.querySelectorAll('div, span, li');
+          for (const item of items) {
+            if (item.children.length === 0 && item.textContent.trim().length > 2) {
+              return item;
+            }
+          }
         }
-
-        const click = new MouseEvent('click', {
-          bubbles: true,
-          cancelable: true,
-          clientX,
-          clientY,
-          view: window,
-          buttons: 1
-        });
-        suggestion.dispatchEvent(click);
-
-        const mouseUp = new MouseEvent('mouseup', {
-          bubbles: true,
-          cancelable: true,
-          clientX,
-          clientY,
-          view: window,
-          buttons: 1
-        });
-        suggestion.dispatchEvent(mouseUp);
-        
-        const pointerUp = new PointerEvent('pointerup', {
-          bubbles: true,
-          cancelable: true,
-          clientX,
-          clientY,
-          pointerType: 'mouse',
-          isPrimary: true
-        });
-        suggestion.dispatchEvent(pointerUp);
-        
-        await sleep(2500);
-      } else {
-        console.warn("Could not locate dropdown suggestion item in DOM. Simulating Arrow Down + Enter keys.");
-        
-        // Fire Arrow Down key event
-        locInput.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowDown', code: 'ArrowDown', keyCode: 40 }));
-        await sleep(500);
-        locInput.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'ArrowDown', code: 'ArrowDown', keyCode: 40 }));
-        await sleep(800);
-
-        // Fire Enter key event to submit
-        locInput.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter', code: 'Enter', keyCode: 13 }));
-        await sleep(500);
-        locInput.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Enter', code: 'Enter', keyCode: 13 }));
-        await sleep(2500);
+        return null;
       }
+    ];
+
+    for (let i = 0; i < strategies.length; i++) {
+      const option = strategies[i]();
+      if (option) {
+        console.log(`[LOCATION] Strategy ${i+1} found option:`, option.textContent.trim());
+
+        // Scroll into view
+        option.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        await sleep(300);
+
+        // Click with multiple methods
+        option.click();
+        option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+        option.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+        option.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+
+        console.log("[LOCATION] Option selected!");
+        return true;
+      }
+    }
+
+    return false;
+  };
+
+  const selected = await selectFirstOption();
+
+  if (!selected) {
+    console.error("[LOCATION] Could not select option!");
+    // Fallback: press Enter key
+    locInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+    locInput.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+    await sleep(1000);
+  }
+
+  await sleep(1000); // Final wait
+  return true;
+}
+
+// Alternative: Keyboard Navigation Method (if click fails)
+async function setLocationWithKeyboard(location) {
+  const locInput = await waitForElement(() => 
+    document.querySelector('input[aria-label="Location"]') ||
+    document.querySelector('input[placeholder*="location" i]')
+  , 10000);
+
+  if (!locInput) return false;
+
+  // Focus and type
+  locInput.click();
+  await sleep(500);
+  locInput.focus();
+
+  // Clear and type
+  locInput.value = '';
+  locInput.dispatchEvent(new Event('input', { bubbles: true }));
+  await sleep(200);
+
+  const nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+  nativeSetter.call(locInput, location);
+  locInput.dispatchEvent(new Event('input', { bubbles: true }));
+  await sleep(2000); // Wait for dropdown
+
+  // Press Down arrow to highlight first option
+  locInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, bubbles: true }));
+  await sleep(500);
+
+  // Press Enter to select
+  locInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+  await sleep(500);
+  locInput.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+  await sleep(1000);
+
+  console.log("[LOCATION] Selected via keyboard");
+  return true;
+}
+
+// RUN FILL SYSTEM (PHASE 1)
+async function runPhase1(data) {
+  console.log("Rapid Lister Pro: Starting autofill sequence...", data);
+  try {
+    // 1. PHOTO UPLOAD (FIRST) - Uploads exactly ONE photo, rotating from the images list
+    console.log("Step 1: Uploading Photos");
+    if (data.images && data.images.length > 0) {
+      const imgIdx = (data.listingIndex || 0) % data.images.length;
+      await uploadPhoto(data.images[imgIdx], `photo_${imgIdx}.jpg`);
+    } else {
+      console.warn("No photos provided for listing");
+    }
+
+    // 2. TITLE
+    console.log("Step 2: Filling Title");
+    const titleInput = await waitForElement(() => findFieldByLabel("Title", "input") || document.querySelector('input[type="text"][maxlength="100"]'));
+    typeIntoField(titleInput, data.title);
+    await sleep(500);
+
+    // 3. PRICE
+    console.log("Step 3: Filling Price");
+    const priceInput = findFieldByLabel("Price", "input") || document.querySelector('input[type="text"][inputmode="numeric"]');
+    typeIntoField(priceInput, data.price);
+    await sleep(500);
+
+    // 4. CATEGORY
+    console.log("Step 4: Selecting Category");
+    const categoryDrop = findFieldByLabel("Category", "div") || document.querySelector('[aria-label="Category"]');
+    if (categoryDrop && data.category) {
+      await selectDropdownOption(categoryDrop, data.category);
+    }
+
+    // 5. CONDITION
+    console.log("Step 5: Selecting Condition");
+    const conditionDrop = findFieldByLabel("Condition", "div") || document.querySelector('[aria-label="Condition"]');
+    if (conditionDrop && data.condition) {
+      await selectDropdownOption(conditionDrop, data.condition);
+    }
+
+    // 6. DESCRIPTION
+    console.log("Step 6: Filling Description");
+    const descTextarea = findFieldByLabel("Description", "textarea") || document.querySelector('textarea[aria-label="Description"]');
+    if (descTextarea) {
+      typeIntoField(descTextarea, data.description);
+      await sleep(500);
+    }
+
+    // 7. AVAILABILITY
+    console.log("Step 7: Selecting Availability");
+    const availDrop = findFieldByLabel("Availability", "div") || document.querySelector('[aria-label="Availability"]');
+    if (availDrop && data.availability) {
+      await selectDropdownOption(availDrop, data.availability);
+    }
+
+    // 8. PRODUCT TAGS
+    console.log("Step 8: Adding Product Tags");
+    const tagsInput = findFieldByLabel("Product tags", "textarea") || findFieldByLabel("Tags", "input") || document.querySelector('[aria-label="Product tags"] textarea');
+    if (tagsInput && data.tags) {
+      const tags = data.tags.split(',').map(t => t.trim()).filter(Boolean);
+      for (const tag of tags) {
+        typeIntoField(tagsInput, tag);
+        await sleep(300);
+        // Press Enter to submit the tag
+        tagsInput.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Enter', code: 'Enter', keyCode: 13 }));
+        await sleep(300);
+      }
+    }
+
+    // 9. QUANTITY (if > 1 and single item not chosen)
+    if (data.quantity && parseInt(data.quantity) > 1) {
+      console.log("Step 9: Filling Quantity");
+      const qtyInput = findFieldByLabel("Quantity", "input") || document.querySelector('[aria-label="Quantity"]');
+      if (qtyInput) {
+        typeIntoField(qtyInput, data.quantity);
+        await sleep(500);
+      }
+    }
+
+    // 10. LOCATION
+    if (data.location) {
+      console.log("Step 10: Setting location...");
+      await sleep(500);
+
+      // Try primary method first
+      let locationSet = await setLocation(data.location);
+
+      // If primary fails, try keyboard method
+      if (!locationSet) {
+        console.log("Primary failed, trying keyboard...");
+        locationSet = await setLocationWithKeyboard(data.location);
+      }
+
+      await sleep(1000);
     }
 
     // 11. SAVE DRAFT (LAST)
