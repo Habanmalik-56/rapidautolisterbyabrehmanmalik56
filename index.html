@@ -30,11 +30,10 @@
       <div class="badge">🔥 Facebook Marketplace Automation — v2.0.0</div>
       <h1>Automate Facebook Marketplace <span class="grad">Bulk Listings</span> in 1 Click</h1>
       <p class="hero-sub">Fill details, rotate 40+ USA cities, open 10 background tabs, save drafts and auto-publish — all automatically. Built for drop-shippers & volume sellers.</p>
-      <div class="hero-btns">
-        <button id="download-btn" onclick="downloadExtensionZip()" class="btn-main" style="cursor: pointer; border: none; font-family: inherit; font-size: inherit;">
+        <a href="rapid-lister-pro.zip" download="rapid-lister-pro.zip" class="btn-main">
           <svg viewBox="0 0 24 24" style="width: 20px; height: 20px; margin-right: 8px;"><path fill="currentColor" d="M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z"/></svg>
           Download Extension (ZIP)
-        </button>
+        </a>
         <a href="#pricing" class="btn-outline">Get Lifetime License — $2</a>
       </div>
     </div>
@@ -162,87 +161,5 @@
       <p>Developed by <strong>AB Rehman Malik</strong> | <a href="https://wa.me/923298073541" target="_blank">+923298073541</a></p>
     </div>
   </footer>
-
-  <!-- JSZIP SCRIPT FOR DYNAMIC ZIP GENERATION -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-  <script>
-    async function downloadExtensionZip() {
-      const downloadBtn = document.getElementById('download-btn');
-      const originalText = downloadBtn.innerHTML;
-      
-      // Change button state to loading
-      downloadBtn.style.opacity = '0.7';
-      downloadBtn.style.pointerEvents = 'none';
-      downloadBtn.innerHTML = `
-        <svg class="spinner" viewBox="0 0 50 50" style="animation: rotate 2s linear infinite; width: 20px; height: 20px; margin-right: 8px;">
-          <circle cx="25" cy="25" r="20" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" style="stroke-dasharray: 1, 150; stroke-dashoffset: 0; animation: dash 1.5s ease-in-out infinite;"></circle>
-        </svg>
-        Packaging ZIP...
-      `;
-      
-      try {
-        const zip = new JSZip();
-        
-        // List of files to fetch and include in the zip
-        const files = [
-          { name: 'manifest.json', type: 'text' },
-          { name: 'background.js', type: 'text' },
-          { name: 'content.js', type: 'text' },
-          { name: 'popup.html', type: 'text' },
-          { name: 'popup.js', type: 'text' },
-          { name: 'styles.css', type: 'text' },
-          { name: 'icon.png', type: 'blob' }
-        ];
-        
-        // Fetch each file and add to zip
-        for (const file of files) {
-          const response = await fetch('extension/' + file.name);
-          if (!response.ok) {
-            throw new Error(`Failed to fetch ${file.name}`);
-          }
-          if (file.type === 'blob') {
-            const blob = await response.blob();
-            zip.file(file.name, blob);
-          } else {
-            const text = await response.text();
-            zip.file(file.name, text);
-          }
-        }
-        
-        // Generate the zip file
-        const content = await zip.generateAsync({ type: 'blob' });
-        
-        // Create temporary download link
-        const url = window.URL.createObjectURL(content);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'rapid-lister-pro.zip';
-        document.body.appendChild(a);
-        a.click();
-        window.URL.revokeObjectURL(url);
-        document.body.removeChild(a);
-        
-      } catch (error) {
-        console.error(error);
-        alert('Failed to download extension. Please try again or contact support.');
-      } finally {
-        // Restore button state
-        downloadBtn.style.opacity = '1';
-        downloadBtn.style.pointerEvents = 'auto';
-        downloadBtn.innerHTML = originalText;
-      }
-    }
-  </script>
-  
-  <style>
-    @keyframes rotate {
-      100% { transform: rotate(360deg); }
-    }
-    @keyframes dash {
-      0% { stroke-dasharray: 1, 150; stroke-dashoffset: 0; }
-      50% { stroke-dasharray: 90, 150; stroke-dashoffset: -35; }
-      100% { stroke-dasharray: 90, 150; stroke-dashoffset: -124; }
-    }
-  </style>
 </body>
 </html>
