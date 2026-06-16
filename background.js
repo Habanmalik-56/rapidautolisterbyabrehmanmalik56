@@ -222,7 +222,16 @@ async function finishPhase1() {
     } catch (e) {}
   }
 
+  // Double check and close any remaining Facebook create/item tabs that might be open
+  try {
+    const tabs = await chrome.tabs.query({ url: "*://*.facebook.com/marketplace/create/item*" });
+    for (const t of tabs) {
+      await chrome.tabs.remove(t.id);
+    }
+  } catch (e) {}
+
   state.activeJob = false;
+  state.currentBatchTabs = [];
   
   // Open the selling page to initiate Phase 2
   chrome.tabs.create({

@@ -178,30 +178,54 @@ async function runPhase1(data) {
       // Clear value and dispatch input event
       locInput.value = '';
       locInput.dispatchEvent(new Event('input', { bubbles: true }));
-      await sleep(500);
+      await sleep(1000);
       
       // Type location to trigger suggestions
       typeIntoField(locInput, data.location);
       await sleep(3000); // Wait 3 seconds for suggestions to load
       
+      // Let's also dispatch keyup/keydown to ensure React/FB updates suggestions
+      locInput.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'a', keyCode: 65 }));
+      locInput.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'a', keyCode: 65 }));
+      await sleep(1000);
+      
       // Find and click the autocomplete suggestion
       let suggestion = null;
-      const options = [...document.querySelectorAll('[role="option"], [role="listbox"] div, ul li')];
+      // Look for options in lists, role="option", or listbox divs
+      const options = [...document.querySelectorAll('[role="option"], [role="listbox"] div, ul li, [id^="dir-autocomplete"] li, div[role="button"] span')];
       
       suggestion = options.find(el => 
         el.textContent.trim().toLowerCase().includes(data.location.toLowerCase())
       );
       
       if (!suggestion && options.length > 0) {
-        suggestion = options[0]; // fallback to first option
+        // Find any option that has text content with city/state pattern
+        suggestion = options.find(el => el.textContent.trim().length > 0 && el.textContent.includes(','));
+        if (!suggestion) {
+          suggestion = options[0]; // fallback to first option
+        }
       }
       
       if (suggestion) {
         console.log("Found location suggestion, clicking:", suggestion.textContent);
+        // Dispatch mouse down, click, and mouse up to simulate a real click
+        suggestion.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
         suggestion.click();
+        suggestion.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
         await sleep(2000); // Wait for Facebook UI update
       } else {
         console.warn("Could not find any location suggestions in the DOM");
+        // Try clicking on the first element inside any container that popped up
+        const popupList = document.querySelector('[role="listbox"], [role="menu"]');
+        if (popupList) {
+          const firstItem = popupList.querySelector('div, li, [role="option"]');
+          if (firstItem) {
+            console.log("Clicking first item in popup container:", firstItem.textContent);
+            firstItem.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+            firstItem.click();
+            await sleep(2000);
+          }
+        }
       }
     }
 
