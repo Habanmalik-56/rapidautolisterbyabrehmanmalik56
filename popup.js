@@ -34,17 +34,6 @@ const statusMsg = document.getElementById("status-msg");
 
 let loadedImages = []; // base64 images
 
-const USA_LOCATIONS = [
-  "New York, NY", "Los Angeles, CA", "Chicago, IL", "Houston, TX", "Phoenix, AZ", 
-  "Philadelphia, PA", "San Antonio, TX", "San Diego, CA", "Dallas, TX", "San Jose, CA", 
-  "Austin, TX", "Jacksonville, FL", "Fort Worth, TX", "Columbus, OH", "Charlotte, NC", 
-  "Indianapolis, IN", "San Francisco, CA", "Seattle, WA", "Denver, CO", "Washington, DC", 
-  "Boston, MA", "El Paso, TX", "Nashville, TN", "Detroit, MI", "Oklahoma City, OK", 
-  "Portland, OR", "Las Vegas, NV", "Louisville, KY", "Baltimore, MD", "Milwaukee, WI", 
-  "Albuquerque, NM", "Tucson, AZ", "Fresno, CA", "Sacramento, CA", "Mesa, AZ", 
-  "Kansas City, MO", "Atlanta, GA", "Long Beach, CA", "Colorado Springs, CO", "Raleigh, NC"
-];
-
 // Initialize
 document.addEventListener("DOMContentLoaded", () => {
   initTabs();
@@ -267,9 +256,10 @@ async function loadCustomLocations() {
   if (result.customLocations && Array.isArray(result.customLocations)) {
     customLocationsText.value = result.customLocations.join("\n");
   } else {
-    // Populate with default USA locations if nothing is saved
-    customLocationsText.value = USA_LOCATIONS.join("\n");
-    await chrome.storage.local.set({ customLocations: USA_LOCATIONS });
+    // Populate with a clean default list if nothing is saved
+    const defaults = ["New York, NY", "Los Angeles, CA", "Chicago, IL"];
+    customLocationsText.value = defaults.join("\n");
+    await chrome.storage.local.set({ customLocations: defaults });
   }
 }
 
