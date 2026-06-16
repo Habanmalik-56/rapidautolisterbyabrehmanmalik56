@@ -94,12 +94,11 @@ function findFieldByLabel(labelText, tagName = 'input') {
 async function runPhase1(data) {
   console.log("Rapid Lister Pro: Starting autofill sequence...", data);
   try {
-    // 1. PHOTO UPLOAD (FIRST)
+    // 1. PHOTO UPLOAD (FIRST) - Uploads exactly ONE photo, rotating from the images list
     console.log("Step 1: Uploading Photos");
     if (data.images && data.images.length > 0) {
-      for (let i = 0; i < data.images.length; i++) {
-        await uploadPhoto(data.images[i], `photo_${i}.jpg`);
-      }
+      const imgIdx = (data.listingIndex || 0) % data.images.length;
+      await uploadPhoto(data.images[imgIdx], `photo_${imgIdx}.jpg`);
     } else {
       console.warn("No photos provided for listing");
     }
@@ -173,22 +172,37 @@ async function runPhase1(data) {
     console.log("Step 10: Setting Location");
     const locInput = findFieldByLabel("Location", "input") || document.querySelector('[aria-label="Location"]');
     if (locInput && data.location) {
-      // Clear current location value
       locInput.focus();
-      typeIntoField(locInput, data.location);
-      await sleep(1500); // Wait for location search suggestion dropdown
+      locInput.select();
       
-      // Auto-suggest select
-      const suggestOption = [...document.querySelectorAll('[role="option"], span, div')]
-        .find(el => el.textContent.toLowerCase().includes(data.location.toLowerCase()));
-      if (suggestOption) {
-        suggestOption.click();
-      } else {
-        // Fallback: click first option in role="option" list
-        const firstOpt = document.querySelector('[role="option"]');
-        if (firstOpt) firstOpt.click();
+      // Clear value and dispatch input event
+      locInput.value = '';
+      locInput.dispatchEvent(new Event('input', { bubbles: true }));
+      await sleep(500);
+      
+      // Type location to trigger suggestions
+      typeIntoField(locInput, data.location);
+      await sleep(3000); // Wait 3 seconds for suggestions to load
+      
+      // Find and click the autocomplete suggestion
+      let suggestion = null;
+      const options = [...document.querySelectorAll('[role="option"], [role="listbox"] div, ul li')];
+      
+      suggestion = options.find(el => 
+        el.textContent.trim().toLowerCase().includes(data.location.toLowerCase())
+      );
+      
+      if (!suggestion && options.length > 0) {
+        suggestion = options[0]; // fallback to first option
       }
-      await sleep(1000);
+      
+      if (suggestion) {
+        console.log("Found location suggestion, clicking:", suggestion.textContent);
+        suggestion.click();
+        await sleep(2000); // Wait for Facebook UI update
+      } else {
+        console.warn("Could not find any location suggestions in the DOM");
+      }
     }
 
     // 11. SAVE DRAFT (LAST)

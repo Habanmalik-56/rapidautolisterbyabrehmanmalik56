@@ -25,9 +25,8 @@ const clearAllBtn = document.getElementById("clear-all-btn");
 const detectDraftsBtn = document.getElementById("detect-drafts-btn");
 const draftsList = document.getElementById("drafts-list");
 
-const overrideLocationInput = document.getElementById("override-location");
-const applyLocationBtn = document.getElementById("apply-location-btn");
-const locationsTagsContainer = document.getElementById("locations-tags-container");
+const customLocationsText = document.getElementById("custom-locations-text");
+const saveLocationsBtn = document.getElementById("save-locations-btn");
 
 const statusDot = document.getElementById("status-dot");
 const statusText = document.getElementById("status-text");
@@ -52,7 +51,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initDragAndDrop();
   initCharCounters();
   loadSavedData();
-  renderLocations();
+  loadCustomLocations();
   listenToStatusUpdates();
   checkCurrentJobState();
 });
@@ -263,22 +262,28 @@ async function loadDraftsList() {
 }
 
 // Locations Pane
-function renderLocations() {
-  locationsTagsContainer.innerHTML = "";
-  USA_LOCATIONS.forEach(loc => {
-    const tag = document.createElement("span");
-    tag.className = "location-tag";
-    tag.textContent = loc;
-    locationsTagsContainer.appendChild(tag);
-  });
+async function loadCustomLocations() {
+  const result = await chrome.storage.local.get("customLocations");
+  if (result.customLocations && Array.isArray(result.customLocations)) {
+    customLocationsText.value = result.customLocations.join("\n");
+  } else {
+    // Populate with default USA locations if nothing is saved
+    customLocationsText.value = USA_LOCATIONS.join("\n");
+    await chrome.storage.local.set({ customLocations: USA_LOCATIONS });
+  }
 }
 
-applyLocationBtn.addEventListener("click", async () => {
-  const val = overrideLocationInput.value.trim();
-  if (val) {
-    // Modify current job location or update general list setting
-    showStatus("Success", `Custom location applied: ${val}`);
+saveLocationsBtn.addEventListener("click", async () => {
+  const text = customLocationsText.value.trim();
+  const locations = text.split("\n").map(l => l.trim()).filter(Boolean);
+  
+  if (locations.length === 0) {
+    showStatus("Error", "Please enter at least one location!");
+    return;
   }
+  
+  await chrome.storage.local.set({ customLocations: locations });
+  showStatus("Success", "Custom locations list saved!");
 });
 
 // Status and Messages updates

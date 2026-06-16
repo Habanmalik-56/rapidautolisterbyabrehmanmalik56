@@ -155,19 +155,12 @@
       <!-- Locations Tab -->
       <section id="locations" class="tab-pane">
         <h3>Bulk Location Rotation</h3>
-        <p class="section-desc">Listing process automatically cycles through these locations for wide coverage.</p>
+        <p class="section-desc">Enter locations (one per line) to cycle through during listing.</p>
         <div class="form-group">
-          <label for="override-location">Set Custom Location (Applies immediately)</label>
-          <input type="text" id="override-location" placeholder="e.g. New York, NY">
+          <label for="custom-locations-text">Rotating Locations List (One per line)</label>
+          <textarea id="custom-locations-text" placeholder="e.g.&#10;New York, NY&#10;Los Angeles, CA&#10;Chicago, IL" style="width: 100%; height: 180px; background: #0f0f18; border: 1px solid #1e1e30; color: #f1f5f9; padding: 10px; border-radius: 8px; font-family: inherit; resize: vertical;"></textarea>
         </div>
-        <button id="apply-location-btn" class="btn btn-gradient">Apply Location</button>
-        
-        <div class="locations-preview">
-          <h4>Active Rotating Locations list:</h4>
-          <div class="locations-tags" id="locations-tags-container">
-            <!-- Dynamically populated locations -->
-          </div>
-        </div>
+        <button id="save-locations-btn" class="btn btn-gradient" style="width: 100%;">Save Locations List</button>
       </section>
     </main>
 

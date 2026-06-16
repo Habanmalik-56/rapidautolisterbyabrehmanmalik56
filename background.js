@@ -62,6 +62,14 @@ async function startBulkListing(data) {
   await processNextBatch();
 }
 
+async function getLocationsList() {
+  const result = await chrome.storage.local.get("customLocations");
+  if (result.customLocations && Array.isArray(result.customLocations) && result.customLocations.length > 0) {
+    return result.customLocations;
+  }
+  return ["New York, NY"]; // fallback
+}
+
 async function processNextBatch() {
   if (!state.activeJob) return;
 
@@ -77,11 +85,13 @@ async function processNextBatch() {
   
   updateProgress(`Opening batch ${state.currentBatchIndex + 1}/${state.totalBatchesNeeded}...`, (state.createdCount / state.totalToCreate) * 100);
 
+  const locations = await getLocationsList();
+
   for (let i = 0; i < currentBatchSize; i++) {
     if (!state.activeJob) return;
     
-    const locationIndex = (state.createdCount + i) % LOCATIONS.length;
-    const location = LOCATIONS[locationIndex];
+    const locationIndex = (state.createdCount + i) % locations.length;
+    const location = locations[locationIndex];
 
     // Create a unique listing data payload with location
     const listingPayload = {
@@ -91,7 +101,6 @@ async function processNextBatch() {
     };
 
     // Store listing payload for the tab to pick up
-    // We can store key-value pair of tabId to payload in storage
     const tab = await chrome.tabs.create({
       url: "https://www.facebook.com/marketplace/create/item",
       active: false // background tabs for performance & memory
@@ -145,21 +154,59 @@ async function handleBatchCompletion() {
   const remaining = state.totalToCreate - state.createdCount;
   
   if (remaining > 0) {
-    updateProgress(`Batch completed. Pausing for 30 seconds before next batch...`, (state.createdCount / state.totalToCreate) * 100);
+    updateProgress(`Batch completed. Redirecting tabs for next listings...`, (state.createdCount / state.totalToCreate) * 100);
     
-    // Close the completed tabs in this batch
-    for (const tabId of state.currentBatchTabs) {
-      try {
-        await chrome.tabs.remove(tabId);
-      } catch (e) {
-        // Tab might already be closed
-      }
-    }
+    const currentBatchSize = Math.min(state.batchSize, remaining);
+    const locations = await getLocationsList();
+    const activeTabs = [...state.currentBatchTabs];
+    
     state.currentBatchTabs = [];
+    state.completedTabs = 0;
+    
+    for (let i = 0; i < activeTabs.length; i++) {
+      const tabId = activeTabs[i];
+      
+      // Close extra tabs if next batch is smaller
+      if (i >= currentBatchSize) {
+        try {
+          await chrome.tabs.remove(tabId);
+        } catch (e) {}
+        continue;
+      }
+      
+      const locationIndex = (state.createdCount + i) % locations.length;
+      const location = locations[locationIndex];
 
-    // Wait 30 seconds between batches
-    await sleep(30000);
-    await processNextBatch();
+      const listingPayload = {
+        ...state.listingsData,
+        location: location,
+        listingIndex: state.createdCount + i
+      };
+
+      const key = `pendingAutofill_${tabId}`;
+      await chrome.storage.local.set({ [key]: listingPayload });
+      
+      state.currentBatchTabs.push(tabId);
+
+      // Redirect rather than close & recreate
+      try {
+        await chrome.tabs.update(tabId, { url: "https://www.facebook.com/marketplace/create/item" });
+      } catch (e) {
+        // If tab was closed by user, recreate it
+        const tab = await chrome.tabs.create({
+          url: "https://www.facebook.com/marketplace/create/item",
+          active: false
+        });
+        state.currentBatchTabs[state.currentBatchTabs.length - 1] = tab.id;
+        const newKey = `pendingAutofill_${tab.id}`;
+        await chrome.storage.local.set({ [newKey]: listingPayload });
+      }
+      
+      await sleep(1000); // slight stagger on redirect
+    }
+    
+    // Setup timeout alarm for the new batch
+    chrome.alarms.create("batchTimeout", { delayInMinutes: 5 });
   } else {
     finishPhase1();
   }
