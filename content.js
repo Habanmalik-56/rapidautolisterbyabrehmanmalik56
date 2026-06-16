@@ -31,23 +31,86 @@ async function uploadPhoto(base64Image, filename) {
 }
 
 async function selectDropdownOption(dropdownEl, optionText) {
-  if (!dropdownEl) return;
+  if (!dropdownEl || !optionText) return;
+
+  console.log("[DROPDOWN] Selecting:", optionText);
+
+  // Step 1: Click dropdown to open (with full event sequence for React)
+  dropdownEl.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+  await sleep(100);
+  dropdownEl.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+  await sleep(100);
   dropdownEl.click();
-  await sleep(1000);
-  const option = [...document.querySelectorAll('[role="option"], span, div, li')]
-    .find(el => el.children.length === 0 && el.textContent.trim().toLowerCase() === optionText.toLowerCase());
-  if (option) {
-    option.click();
-    await sleep(500);
-  } else {
-    // Fallback: try finding container elements containing the text
-    const fallbackOption = [...document.querySelectorAll('[role="option"], [role="menuitem"]')]
-      .find(el => el.textContent.trim().toLowerCase().includes(optionText.toLowerCase()));
-    if (fallbackOption) {
-      fallbackOption.click();
-      await sleep(500);
-    }
+  await sleep(1500); // Wait for dropdown to FULLY open
+
+  // Step 2: Find option with multiple strategies
+  let optionEl = null;
+  let foundStrategy = 0;
+
+  // Strategy 1: role="option" with exact text match
+  const allOptions = [...document.querySelectorAll('[role="option"]')];
+  optionEl = allOptions.find(el => {
+    const text = el.textContent.trim().toLowerCase();
+    return text === optionText.toLowerCase() || 
+           text.includes(optionText.toLowerCase());
+  });
+  if (optionEl) foundStrategy = 1;
+
+  // Strategy 2: Any element with exact text (children.length === 0)
+  if (!optionEl) {
+    optionEl = [...document.querySelectorAll('div, span, li')].find(el => {
+      const text = el.textContent.trim().toLowerCase();
+      return el.children.length === 0 && 
+             text.length > 0 && text.length < 50 &&
+             (text === optionText.toLowerCase() || text.includes(optionText.toLowerCase()));
+    });
+    if (optionEl) foundStrategy = 2;
   }
+
+  // Strategy 3: Partial match (for "Used - Like New" when searching "Like New")
+  if (!optionEl) {
+    optionEl = [...document.querySelectorAll('div, span, li')].find(el => {
+      const text = el.textContent.trim().toLowerCase();
+      const searchText = optionText.toLowerCase();
+      return el.children.length === 0 && 
+             text.length > 0 && text.length < 60 &&
+             (searchText.includes(text) || text.includes(searchText.split(' ')[0]));
+    });
+    if (optionEl) foundStrategy = 3;
+  }
+
+  if (!optionEl) {
+    console.log("[DROPDOWN] Option not found:", optionText);
+    return;
+  }
+
+  console.log("[DROPDOWN] Found via strategy", foundStrategy, ":", optionEl.textContent.trim());
+
+  // Step 3: Scroll into view
+  optionEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  await sleep(500);
+
+  // Step 4: Click with FULL event sequence (React needs this)
+  optionEl.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+  await sleep(100);
+  optionEl.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+  await sleep(100);
+  optionEl.click();
+  await sleep(100);
+
+  // Step 5: Also dispatch keyboard Enter (backup for React)
+  optionEl.dispatchEvent(new KeyboardEvent('keydown', { 
+    key: 'Enter', code: 'Enter', keyCode: 13, 
+    bubbles: true, cancelable: true, view: window 
+  }));
+  await sleep(100);
+  optionEl.dispatchEvent(new KeyboardEvent('keyup', { 
+    key: 'Enter', code: 'Enter', keyCode: 13, 
+    bubbles: true, cancelable: true, view: window 
+  }));
+
+  await sleep(800);
+  console.log("[DROPDOWN] Selected:", optionText);
 }
 
 function waitForElement(selectorFn, timeoutMs = 15000) {
@@ -94,10 +157,6 @@ function findFieldByLabel(labelText, tagName = 'input') {
 async function runPhase1(data) {
   console.log("Rapid Lister Pro: Starting autofill sequence...", data);
   try {
-    // BATCH SETUP: Check if this is part of a batch
-    if (data.batchIndex !== undefined) {
-      console.log(`[BATCH] Processing listing ${data.batchIndex + 1}/${data.totalCount}`);
-    }
     // 1. PHOTO UPLOAD (FIRST) - Uploads exactly ONE photo, rotating from the images list
     console.log("Step 1: Uploading Photos");
     if (data.images && data.images.length > 0) {
@@ -199,22 +258,7 @@ async function runPhase1(data) {
 
     // 12. Signal background to close/redirect tab
     await sleep(3000);
-
-    // CHECK IF BATCH CONTINUES
-    chrome.storage.local.get(['batchConfig'], async (res) => {
-      const batch = res.batchConfig;
-      if (batch && batch.currentIndex < batch.totalCount) {
-        // More listings to process - navigate to create new item
-        batch.currentIndex++;
-        await chrome.storage.local.set({ batchConfig: batch });
-        console.log(`[BATCH] Continuing to listing ${batch.currentIndex}/${batch.totalCount}`);
-        window.location.href = 'https://www.facebook.com/marketplace/create/item';
-      } else {
-        // Batch complete - close tab
-        console.log("[BATCH] All listings done! Closing tab...");
-        chrome.runtime.sendMessage({ action: "DRAFT_SAVED" });
-      }
-    });
+    chrome.runtime.sendMessage({ action: "DRAFT_SAVED" });
 
   } catch (error) {
     console.error("Autofill process failed:", error);
@@ -239,30 +283,161 @@ async function setLocation(location) {
     return false;
   }
 
-  // Step 2: Click and focus
+  // Step 2: Focus and clear
   locInput.click();
   await sleep(300);
   locInput.focus();
   await sleep(300);
 
-  // Step 3: Clear existing value
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
   setter.call(locInput, '');
   locInput.dispatchEvent(new Event('input', { bubbles: true }));
   await sleep(300);
 
-  // Step 4: Type using React-compatible setter
+  // Step 3: Type location
   typeIntoField(locInput, location);
-  await sleep(4000); // CRITICAL: wait for Facebook network request
+  console.log("[LOCATION] Typed:", location);
 
-  // Step 5: Select using keyboard ArrowDown + Enter (the only method React honors because clicks have isTrusted=false)
-  locInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, bubbles: true }));
-  await sleep(600);
-  locInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
-  await sleep(600);
-  locInput.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+  // CRITICAL: Wait for Facebook network request + dropdown render
+  await sleep(3500);
+
+  // Step 4: Find and select option - MULTIPLE ATTEMPTS
+  let selected = false;
+  let attempts = 0;
+  const maxAttempts = 8;
+
+  while (!selected && attempts < maxAttempts) {
+    attempts++;
+    console.log(`[LOCATION] Attempt ${attempts}/${maxAttempts}`);
+
+    // Strategy 1: role="option" elements
+    const roleOptions = [...document.querySelectorAll('[role="option"]')];
+    if (roleOptions.length > 0) {
+      const firstOption = roleOptions[0];
+      console.log("[LOCATION] Found role option:", firstOption.textContent.trim());
+
+      firstOption.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      await sleep(500);
+
+      // Full click sequence
+      firstOption.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+      await sleep(100);
+      firstOption.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+      await sleep(100);
+      firstOption.click();
+      await sleep(100);
+      firstOption.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true, cancelable: true, view: window }));
+      await sleep(100);
+      firstOption.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true, cancelable: true, view: window }));
+
+      selected = true;
+      console.log("[LOCATION] Selected via role option");
+      break;
+    }
+
+    // Strategy 2: listbox container
+    if (!selected) {
+      const listbox = document.querySelector('[role="listbox"]');
+      if (listbox) {
+        const items = [...listbox.querySelectorAll('div, span, li')].filter(el => 
+          el.children.length === 0 && el.textContent.trim().length > 2
+        );
+        if (items.length > 0) {
+          const firstItem = items[0];
+          console.log("[LOCATION] Found listbox item:", firstItem.textContent.trim());
+
+          firstItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          await sleep(500);
+
+          firstItem.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+          await sleep(100);
+          firstItem.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+          await sleep(100);
+          firstItem.click();
+          await sleep(100);
+          firstItem.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true, cancelable: true, view: window }));
+          await sleep(100);
+          firstItem.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true, cancelable: true, view: window }));
+
+          selected = true;
+          console.log("[LOCATION] Selected via listbox");
+          break;
+        }
+      }
+    }
+
+    // Strategy 3: Any visible element with location text
+    if (!selected) {
+      const locationCity = location.toLowerCase().split(',')[0];
+      const allElements = [...document.querySelectorAll('div, span, li')].filter(el => {
+        const text = el.textContent.trim().toLowerCase();
+        return el.children.length === 0 && 
+               text.length > 2 && text.length < 60 &&
+               (text.includes(locationCity) || text.includes('new york') || text.includes('los angeles')) &&
+               el.offsetParent !== null;
+      });
+
+      if (allElements.length > 0) {
+        const firstEl = allElements[0];
+        console.log("[LOCATION] Found text match:", firstEl.textContent.trim());
+
+        firstEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        await sleep(500);
+
+        firstEl.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+        await sleep(100);
+        firstEl.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+        await sleep(100);
+        firstEl.click();
+        await sleep(100);
+        firstEl.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true, cancelable: true, view: window }));
+        await sleep(100);
+        firstEl.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true, cancelable: true, view: window }));
+
+        selected = true;
+        console.log("[LOCATION] Selected via text match");
+        break;
+      }
+    }
+
+    // Wait before retry
+    await sleep(800);
+  }
+
+  // Strategy 4: Keyboard fallback (if all clicks failed)
+  if (!selected) {
+    console.log("[LOCATION] All clicks failed, using keyboard...");
+
+    locInput.focus();
+    await sleep(500);
+
+    // Press Down to highlight first suggestion
+    locInput.dispatchEvent(new KeyboardEvent('keydown', { 
+      key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, 
+      bubbles: true, cancelable: true, view: window 
+    }));
+    await sleep(1000);
+
+    // Press Enter to select
+    locInput.dispatchEvent(new KeyboardEvent('keydown', { 
+      key: 'Enter', code: 'Enter', keyCode: 13, 
+      bubbles: true, cancelable: true, view: window 
+    }));
+    await sleep(200);
+    locInput.dispatchEvent(new KeyboardEvent('keypress', { 
+      key: 'Enter', code: 'Enter', keyCode: 13, 
+      bubbles: true, cancelable: true, view: window 
+    }));
+    await sleep(200);
+    locInput.dispatchEvent(new KeyboardEvent('keyup', { 
+      key: 'Enter', code: 'Enter', keyCode: 13, 
+      bubbles: true, cancelable: true, view: window 
+    }));
+
+    console.log("[LOCATION] Used keyboard fallback");
+  }
+
   await sleep(1500);
-
   console.log("[LOCATION] Done");
   return true;
 }
