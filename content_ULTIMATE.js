@@ -500,12 +500,50 @@ function stopAutoPublish() {
 // IN EDITING FLOW
 async function runPublishAction() {
   try {
+    console.log("[PUBLISH] Starting publish automation on edit page...");
+    
+    // 1. Check if there is a "Next" / "Siguiente" button and click it first
+    let nextBtn = null;
+    try {
+      nextBtn = await waitForElement(() => {
+        return [...document.querySelectorAll('div[role="button"], span, button, [class*="button"]')]
+          .find(el => {
+            const txt = el.textContent.trim().toLowerCase();
+            return txt === 'next' || txt === 'siguiente';
+          });
+      }, 5000);
+    } catch (e) {
+      console.log("[PUBLISH] Next button not found or not needed, looking directly for Publish...");
+    }
+
+    if (nextBtn) {
+      console.log("[PUBLISH] Found Next button, clicking...");
+      nextBtn.scrollIntoView({ behavior: 'instant', block: 'nearest' });
+      await sleep(800);
+      
+      nextBtn.click();
+      nextBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+      nextBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+      await sleep(2500); // Wait for next step to transition
+    }
+
+    // 2. Wait for and click the "Publish" / "Publicar" button
+    console.log("[PUBLISH] Looking for Publish button...");
     const publishBtn = await waitForElement(() => {
-      return [...document.querySelectorAll('div[role="button"], span, button')]
-        .find(el => el.textContent.trim().toLowerCase() === 'publish');
+      return [...document.querySelectorAll('div[role="button"], span, button, [class*="button"]')]
+        .find(el => {
+          const txt = el.textContent.trim().toLowerCase();
+          return txt === 'publish' || txt === 'publicar' || txt.includes('publish') || txt.includes('publicar');
+        });
     }, 15000);
 
+    console.log("[PUBLISH] Found Publish button, clicking...");
+    publishBtn.scrollIntoView({ behavior: 'instant', block: 'nearest' });
+    await sleep(800);
+    
     publishBtn.click();
+    publishBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+    publishBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
 
     // Wait 6 seconds for publication process to complete
     await sleep(6000);
@@ -513,7 +551,7 @@ async function runPublishAction() {
     chrome.runtime.sendMessage({ action: "PUBLISH_COMPLETE", success: true });
 
   } catch (err) {
-    console.error("Publish button not found or failed:", err);
+    console.error("[PUBLISH] Publish button not found or failed:", err);
     chrome.runtime.sendMessage({ action: "PUBLISH_COMPLETE", success: false });
   }
 }

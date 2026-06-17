@@ -154,60 +154,18 @@ async function handleBatchCompletion() {
   state.currentBatchIndex++;
   const remaining = state.totalToCreate - state.createdCount;
   
+  // Close all current batch tabs
+  for (const tabId of state.currentBatchTabs) {
+    try {
+      await chrome.tabs.remove(tabId);
+    } catch (e) {}
+  }
+  state.currentBatchTabs = [];
+  state.completedTabs = 0;
+
   if (remaining > 0) {
-    updateProgress(`Batch completed. Redirecting tabs for next listings...`, (state.createdCount / state.totalToCreate) * 100);
-    
-    const currentBatchSize = Math.min(state.batchSize, remaining);
-    const locations = await getLocationsList();
-    const activeTabs = [...state.currentBatchTabs];
-    
-    state.currentBatchTabs = [];
-    state.completedTabs = 0;
-    
-    for (let i = 0; i < activeTabs.length; i++) {
-      const tabId = activeTabs[i];
-      
-      // Close extra tabs if next batch is smaller
-      if (i >= currentBatchSize) {
-        try {
-          await chrome.tabs.remove(tabId);
-        } catch (e) {}
-        continue;
-      }
-      
-      const locationIndex = (state.createdCount + i) % locations.length;
-      const location = locations[locationIndex];
-
-      const listingPayload = {
-        ...state.listingsData,
-        location: location,
-        listingIndex: state.createdCount + i
-      };
-
-      const key = `pendingAutofill_${tabId}`;
-      await chrome.storage.local.set({ [key]: listingPayload });
-      
-      state.currentBatchTabs.push(tabId);
-
-      // Redirect rather than close & recreate
-      try {
-        await chrome.tabs.update(tabId, { url: "https://www.facebook.com/marketplace/create/item" });
-      } catch (e) {
-        // If tab was closed by user, recreate it
-        const tab = await chrome.tabs.create({
-          url: "https://www.facebook.com/marketplace/create/item",
-          active: false
-        });
-        state.currentBatchTabs[state.currentBatchTabs.length - 1] = tab.id;
-        const newKey = `pendingAutofill_${tab.id}`;
-        await chrome.storage.local.set({ [newKey]: listingPayload });
-      }
-      
-      await sleep(1000); // slight stagger on redirect
-    }
-    
-    // Setup timeout alarm for the new batch
-    chrome.alarms.create("batchTimeout", { delayInMinutes: 5 });
+    updateProgress(`Batch completed. Opening tabs for next listings...`, (state.createdCount / state.totalToCreate) * 100);
+    await processNextBatch();
   } else {
     finishPhase1();
   }
