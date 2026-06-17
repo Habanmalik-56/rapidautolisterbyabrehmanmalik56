@@ -29,6 +29,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message.action === "STOP_BULK_LISTING") {
     stopBulkListing();
     sendResponse({ status: "stopped" });
+  } else if (message.action === "START_BACKGROUND_PUBLISH") {
+    startBackgroundPublish(message.urls);
+    sendResponse({ status: "started" });
+  } else if (message.action === "CHECK_AUTO_PUBLISH") {
+    const isPublishTab = publishState.active && publishState.running && publishState.activeTabs[sender.tab.id];
+    sendResponse({ isPublishTab: !!isPublishTab });
+  } else if (message.action === "PUBLISH_COMPLETE") {
+    handlePublishComplete(sender.tab.id, message.success);
+    sendResponse({ status: "acknowledged" });
+  } else if (message.action === "STOP_BACKGROUND_PUBLISH") {
+    stopBackgroundPublish();
+    sendResponse({ status: "stopped" });
   }
   return true;
 });
@@ -267,4 +279,127 @@ function updateProgress(message, percent) {
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+let publishState = {
+  active: false,
+  running: false,
+  urls: [],
+  currentIndex: 0,
+  totalDrafts: 0,
+  activeTabs: {}, // tabId -> true
+  maxConcurrentTabs: 3
+};
+
+async function startBackgroundPublish(urls) {
+  publishState.active = true;
+  publishState.running = true;
+  publishState.urls = urls;
+  publishState.currentIndex = 0;
+  publishState.totalDrafts = urls.length;
+  publishState.activeTabs = {};
+
+  updatePublishStatus("Background publishing started...", 0);
+  await launchNextPublishTabs();
+}
+
+async function launchNextPublishTabs() {
+  if (!publishState.active || !publishState.running) return;
+
+  const activeCount = Object.keys(publishState.activeTabs).length;
+  const needed = publishState.maxConcurrentTabs - activeCount;
+
+  for (let i = 0; i < needed; i++) {
+    if (publishState.currentIndex >= publishState.totalDrafts) {
+      break;
+    }
+
+    const url = publishState.urls[publishState.currentIndex];
+    publishState.currentIndex++;
+
+    const tab = await chrome.tabs.create({
+      url: url,
+      active: false
+    });
+
+    publishState.activeTabs[tab.id] = true;
+    updatePublishStatus(`Publishing draft ${publishState.currentIndex}/${publishState.totalDrafts}`, (publishState.currentIndex / publishState.totalDrafts) * 100);
+    
+    await sleep(2500); // 2.5 seconds delay between opening tabs to avoid spamming
+  }
+
+  if (Object.keys(publishState.activeTabs).length === 0 && publishState.currentIndex >= publishState.totalDrafts) {
+    finishBackgroundPublish();
+  }
+}
+
+async function handlePublishComplete(tabId, success) {
+  if (!publishState.activeTabs[tabId]) return;
+
+  delete publishState.activeTabs[tabId];
+
+  try {
+    await chrome.tabs.remove(tabId);
+  } catch (e) {}
+
+  const stateToSave = {
+    active: publishState.active,
+    running: publishState.running,
+    totalDrafts: publishState.totalDrafts,
+    currentIndex: publishState.totalDrafts - (publishState.urls.length - publishState.currentIndex) - Object.keys(publishState.activeTabs).length,
+    statusText: `Published last item ${success ? 'successfully' : 'with error'}.`
+  };
+  chrome.storage.local.set({ autoPublishState: stateToSave });
+
+  await sleep(1000);
+  await launchNextPublishTabs();
+}
+
+function stopBackgroundPublish() {
+  publishState.running = false;
+  publishState.active = false;
+  
+  for (const tabIdStr of Object.keys(publishState.activeTabs)) {
+    const tabId = parseInt(tabIdStr);
+    try {
+      chrome.tabs.remove(tabId);
+    } catch (e) {}
+  }
+  publishState.activeTabs = {};
+  
+  chrome.storage.local.set({
+    autoPublishState: {
+      active: false,
+      running: false,
+      statusText: "Stopped"
+    }
+  });
+}
+
+function finishBackgroundPublish() {
+  publishState.active = false;
+  publishState.running = false;
+  
+  chrome.storage.local.set({
+    autoPublishState: {
+      active: true,
+      running: false,
+      statusText: "ALL DRAFTS PUBLISHED!",
+      currentIndex: publishState.totalDrafts,
+      totalDrafts: publishState.totalDrafts
+    }
+  });
+  
+  chrome.runtime.sendMessage({ action: "BACKGROUND_PUBLISH_FINISHED" }).catch(() => {});
+}
+
+function updatePublishStatus(statusText, percent) {
+  const stateToSave = {
+    active: publishState.active,
+    running: publishState.running,
+    totalDrafts: publishState.totalDrafts,
+    currentIndex: publishState.currentIndex - Object.keys(publishState.activeTabs).length,
+    statusText: statusText
+  };
+  chrome.storage.local.set({ autoPublishState: stateToSave });
 }

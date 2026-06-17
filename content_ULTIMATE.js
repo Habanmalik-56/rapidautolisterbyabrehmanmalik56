@@ -437,13 +437,17 @@ function injectPublishBox() {
     stopAutoPublish();
   });
 
+  // Listen for storage changes to update UI dynamically
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === "local" && changes.autoPublishState && changes.autoPublishState.newValue) {
+      updatePublishUI(changes.autoPublishState.newValue);
+    }
+  });
+
   // Restore state if active
   chrome.storage.local.get(["autoPublishState"], (res) => {
     if (res.autoPublishState && res.autoPublishState.active) {
       updatePublishUI(res.autoPublishState);
-      if (res.autoPublishState.running) {
-        continueAutoPublish();
-      }
     }
   });
 }
@@ -464,92 +468,33 @@ async function startAutoPublish() {
   const drafts = [...document.querySelectorAll('a, div[role="button"], span')]
     .filter(el => el.textContent.trim().toLowerCase() === "continue" || el.textContent.trim().toLowerCase() === "complete listing" || el.textContent.trim().toLowerCase().includes("resume"));
 
-  if (drafts.length === 0) {
-    alert("No draft listings found to publish!");
+  const draftUrls = drafts.map(el => {
+    const anchor = el.tagName === 'A' ? el : el.closest('a');
+    return anchor ? anchor.href : null;
+  }).filter(Boolean);
+
+  if (draftUrls.length === 0) {
+    alert("No draft listing links found to publish! Make sure the page is loaded.");
     return;
   }
 
   const publishState = {
     active: true,
     running: true,
-    totalDrafts: drafts.length,
+    totalDrafts: draftUrls.length,
     currentIndex: 0,
-    statusText: "Initializing..."
+    statusText: "Starting background publish...",
+    urls: draftUrls
   };
 
   await chrome.storage.local.set({ autoPublishState: publishState });
   updatePublishUI(publishState);
-  await runPublishNext();
+  
+  chrome.runtime.sendMessage({ action: "START_BACKGROUND_PUBLISH", urls: draftUrls });
 }
 
 function stopAutoPublish() {
-  chrome.storage.local.get(["autoPublishState"], (res) => {
-    if (res.autoPublishState) {
-      const state = { ...res.autoPublishState, running: false, statusText: "Stopped" };
-      chrome.storage.local.set({ autoPublishState: state });
-      updatePublishUI(state);
-    }
-  });
-}
-
-async function continueAutoPublish() {
-  chrome.storage.local.get(["autoPublishState"], async (res) => {
-    const state = res.autoPublishState;
-    if (!state || !state.running) return;
-
-    if (state.currentIndex >= state.totalDrafts) {
-      state.running = false;
-      state.statusText = "ALL PUBLISHED!";
-      chrome.storage.local.set({ autoPublishState: state });
-      updatePublishUI(state);
-      alert("All draft listings have been published successfully!");
-      return;
-    }
-
-    await runPublishNext();
-  });
-}
-
-async function runPublishNext() {
-  chrome.storage.local.get(["autoPublishState"], async (res) => {
-    const state = res.autoPublishState;
-    if (!state || !state.running) return;
-
-    state.statusText = `Searching drafts...`;
-    chrome.storage.local.set({ autoPublishState: state });
-    updatePublishUI(state);
-
-    // Refresh draft elements list
-    const drafts = [...document.querySelectorAll('a, div[role="button"], span')]
-      .filter(el => el.textContent.trim().toLowerCase() === "continue" || el.textContent.trim().toLowerCase() === "complete listing" || el.textContent.trim().toLowerCase().includes("resume"));
-
-    if (drafts.length === 0 || state.currentIndex >= drafts.length) {
-      state.running = false;
-      state.statusText = "Completed / No more drafts";
-      chrome.storage.local.set({ autoPublishState: state });
-      updatePublishUI(state);
-      return;
-    }
-
-    const draftButton = drafts[state.currentIndex];
-    state.statusText = `Resuming draft #${state.currentIndex + 1}...`;
-    chrome.storage.local.set({ autoPublishState: state });
-    updatePublishUI(state);
-
-    // Click Continue
-    draftButton.scrollIntoView({ block: "center" });
-    await sleep(1000);
-    draftButton.click();
-
-    // The click navigates to editing flow. Wait for "Publish" page.
-    // We let the edit page script take over. We will set a marker in storage that we are in editing flow.
-    await chrome.storage.local.set({
-      autoPublishState: {
-        ...state,
-        inEditMode: true
-      }
-    });
-  });
+  chrome.runtime.sendMessage({ action: "STOP_BACKGROUND_PUBLISH" });
 }
 
 // IN EDITING FLOW
@@ -560,45 +505,16 @@ async function runPublishAction() {
         .find(el => el.textContent.trim().toLowerCase() === 'publish');
     }, 15000);
 
-    // Update state
-    chrome.storage.local.get(["autoPublishState"], async (res) => {
-      const state = res.autoPublishState;
-      if (!state) return;
+    publishBtn.click();
 
-      state.statusText = "Publishing listing...";
-      chrome.storage.local.set({ autoPublishState: state });
+    // Wait 6 seconds for publication process to complete
+    await sleep(6000);
 
-      publishBtn.click();
-
-      // Wait 6 seconds for publication process
-      await sleep(6000);
-
-      // Return to selling page
-      state.currentIndex++;
-      state.inEditMode = false;
-      
-      // Random delay 5-10 seconds between publishes (anti-ban)
-      const randomDelay = Math.floor(Math.random() * 5000) + 5000;
-      state.statusText = `Cooldown for ${Math.round(randomDelay/1000)}s...`;
-      await chrome.storage.local.set({ autoPublishState: state });
-
-      await sleep(randomDelay);
-      
-      // Navigate back to selling page
-      window.location.href = "https://www.facebook.com/marketplace/you/selling";
-    });
+    chrome.runtime.sendMessage({ action: "PUBLISH_COMPLETE", success: true });
 
   } catch (err) {
     console.error("Publish button not found or failed:", err);
-    // Go back anyway after timeout
-    chrome.storage.local.get(["autoPublishState"], (res) => {
-      const state = res.autoPublishState;
-      if (!state) return;
-      state.currentIndex++;
-      state.inEditMode = false;
-      chrome.storage.local.set({ autoPublishState: state });
-      window.location.href = "https://www.facebook.com/marketplace/you/selling";
-    });
+    chrome.runtime.sendMessage({ action: "PUBLISH_COMPLETE", success: false });
   }
 }
 
@@ -607,10 +523,8 @@ async function init() {
   const url = window.location.href;
 
   if (url.includes("/marketplace/create/item")) {
-    // Check if we have active autofill data
     chrome.runtime.sendMessage({ action: "GET_MY_PENDING_DATA" }, async (res) => {
       if (res && res.data) {
-        // Retrieve the images from draftListing to save space in queue storage
         const storage = await chrome.storage.local.get("draftListing");
         const images = (storage.draftListing && storage.draftListing.images) || [];
         const fullData = { ...res.data, images };
@@ -618,16 +532,21 @@ async function init() {
       }
     });
   } else if (url.includes("/marketplace/you/selling")) {
-    // Inject and run publish box
     injectPublishBox();
   } else if (url.includes("/marketplace/edit")) {
-    // Check if we are auto-publishing
-    chrome.storage.local.get(["autoPublishState"], (res) => {
-      if (res.autoPublishState && res.autoPublishState.running && res.autoPublishState.inEditMode) {
+    chrome.runtime.sendMessage({ action: "CHECK_AUTO_PUBLISH" }, (res) => {
+      if (res && res.isPublishTab) {
         runPublishAction();
       }
     });
   }
 }
+
+// Global listener for finished background publishing alert
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.action === "BACKGROUND_PUBLISH_FINISHED") {
+    alert("All draft listings have been published successfully!");
+  }
+});
 
 init();
