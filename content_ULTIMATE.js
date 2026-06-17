@@ -499,59 +499,48 @@ function stopAutoPublish() {
 
 // IN EDITING FLOW
 async function runPublishAction() {
+  const clickElement = (el) => {
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'instant', block: 'center' });
+    el.click();
+    el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+    el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+    el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+  };
+
+  const findClickableByText = (textArray) => {
+    const allElements = [...document.querySelectorAll('div[role="button"], span, button, [class*="button"], a')];
+    return allElements.find(el => {
+      if (el.offsetParent === null) return false; // Must be visible
+      const txt = el.textContent.trim().toLowerCase();
+      return textArray.some(t => txt === t || txt.includes(t));
+    });
+  };
+
   try {
     console.log("[PUBLISH] Starting publish automation on edit page...");
-    
-    // 1. Check if there is a "Next" / "Siguiente" button and click it first
-    let nextBtn = null;
-    try {
-      nextBtn = await waitForElement(() => {
-        return [...document.querySelectorAll('div[role="button"], span, button, [class*="button"]')]
-          .find(el => {
-            const txt = el.textContent.trim().toLowerCase();
-            return txt === 'next' || txt === 'siguiente';
-          });
-      }, 5000);
-    } catch (e) {
-      console.log("[PUBLISH] Next button not found or not needed, looking directly for Publish...");
-    }
+    await sleep(2000); // initial load buffer
 
+    // 1. Check if there is a "Next" / "Siguiente" button and click it first
+    const nextBtn = await waitForElement(() => findClickableByText(['next', 'siguiente']), 8000).catch(() => null);
     if (nextBtn) {
-      console.log("[PUBLISH] Found Next button, clicking...");
-      nextBtn.scrollIntoView({ behavior: 'instant', block: 'nearest' });
-      await sleep(800);
-      
-      nextBtn.click();
-      nextBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
-      nextBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
-      await sleep(2500); // Wait for next step to transition
+      console.log("[PUBLISH] Clicking Next...");
+      clickElement(nextBtn);
+      await sleep(3500); // Wait for transition
     }
 
     // 2. Wait for and click the "Publish" / "Publicar" button
-    console.log("[PUBLISH] Looking for Publish button...");
-    const publishBtn = await waitForElement(() => {
-      return [...document.querySelectorAll('div[role="button"], span, button, [class*="button"]')]
-        .find(el => {
-          const txt = el.textContent.trim().toLowerCase();
-          return txt === 'publish' || txt === 'publicar' || txt.includes('publish') || txt.includes('publicar');
-        });
-    }, 15000);
+    const publishBtn = await waitForElement(() => findClickableByText(['publish', 'publicar']), 15000);
+    console.log("[PUBLISH] Clicking Publish...");
+    clickElement(publishBtn);
 
-    console.log("[PUBLISH] Found Publish button, clicking...");
-    publishBtn.scrollIntoView({ behavior: 'instant', block: 'nearest' });
-    await sleep(800);
-    
-    publishBtn.click();
-    publishBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
-    publishBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
-
-    // Wait 6 seconds for publication process to complete
-    await sleep(6000);
+    // Wait 8 seconds for publication process to complete
+    await sleep(8000);
 
     chrome.runtime.sendMessage({ action: "PUBLISH_COMPLETE", success: true });
 
   } catch (err) {
-    console.error("[PUBLISH] Publish button not found or failed:", err);
+    console.error("[PUBLISH] Publish failed:", err);
     chrome.runtime.sendMessage({ action: "PUBLISH_COMPLETE", success: false });
   }
 }

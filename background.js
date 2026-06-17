@@ -246,7 +246,7 @@ let publishState = {
   currentIndex: 0,
   totalDrafts: 0,
   activeTabs: {}, // tabId -> true
-  maxConcurrentTabs: 3
+  maxConcurrentTabs: 1
 };
 
 async function startBackgroundPublish(urls) {
@@ -277,7 +277,7 @@ async function launchNextPublishTabs() {
 
     const tab = await chrome.tabs.create({
       url: url,
-      active: false
+      active: true
     });
 
     publishState.activeTabs[tab.id] = true;
