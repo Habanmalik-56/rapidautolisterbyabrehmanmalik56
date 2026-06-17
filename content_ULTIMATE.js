@@ -34,52 +34,59 @@ async function selectDropdownOption(dropdownEl, optionText) {
   if (!dropdownEl) return;
   console.log("[SELECT] Clicking dropdown for:", optionText);
   dropdownEl.click();
-  await sleep(1200);
+  await sleep(1500);
   
-  // Wait for options to appear - check 15 times with 300ms interval
+  // Dispatch mouse events on dropdown to open it
+  dropdownEl.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+  dropdownEl.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+  
+  // Wait for options to appear - check 20 times with 250ms interval
   let foundOption = null;
-  for (let attempt = 0; attempt < 15; attempt++) {
+  for (let attempt = 0; attempt < 20; attempt++) {
     const allElements = [
       ...document.querySelectorAll('[role="option"]'),
       ...document.querySelectorAll('[role="menuitem"]'),
       ...document.querySelectorAll('ul li'),
-      ...document.querySelectorAll('[role="listbox"] > div'),
+      ...document.querySelectorAll('[role="listbox"] div'),
       ...document.querySelectorAll('div[style*="background"]'),
       ...document.querySelectorAll('span'),
       ...document.querySelectorAll('div')
     ];
     
-    // Exact match first
-    foundOption = allElements.find(el =>
-      el.children.length === 0 &&
-      el.textContent &&
-      el.textContent.trim().toLowerCase() === optionText.toLowerCase()
-    );
+    const matches = allElements.filter(el => {
+      if (!el.textContent) return false;
+      if (el.offsetParent === null) return false; // Must be visible
+      const text = el.textContent.trim().toLowerCase();
+      const search = optionText.trim().toLowerCase();
+      return text === search || text.includes(search);
+    });
     
-    if (foundOption) {
-      console.log("[SELECT] Found exact match:", optionText);
+    if (matches.length > 0) {
+      // Find the one with shortest text content to get the closest/most specific element
+      matches.sort((a, b) => a.textContent.trim().length - b.textContent.trim().length);
+      foundOption = matches[0];
+      console.log("[SELECT] Found matching option element:", foundOption.textContent.trim());
       break;
     }
     
-    // Partial match
-    foundOption = allElements.find(el =>
-      el.children.length === 0 &&
-      el.textContent &&
-      el.textContent.trim().toLowerCase().includes(optionText.toLowerCase()) &&
-      el.textContent.trim().length < 100
-    );
-    
-    if (foundOption) {
-      console.log("[SELECT] Found partial match:", foundOption.textContent.trim().substring(0, 30));
-      break;
-    }
-    
-    await sleep(300);
+    await sleep(250);
   }
   
   if (foundOption) {
     console.log("[SELECT] Clicking option:", optionText);
+    foundOption.scrollIntoView({ behavior: 'instant', block: 'nearest' });
+    await sleep(200);
+    
     foundOption.click();
+    foundOption.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+    foundOption.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+    
+    const parentOption = foundOption.closest('[role="option"], [role="menuitem"], li');
+    if (parentOption && parentOption !== foundOption) {
+      parentOption.click();
+      parentOption.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+      parentOption.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+    }
     await sleep(800);
   } else {
     console.warn("[SELECT] Option not found:", optionText);
@@ -175,9 +182,25 @@ async function runPhase1(data) {
 
     // 7. AVAILABILITY
     console.log("Step 7: Selecting Availability");
-    const availDrop = findFieldByLabel("Availability", "div") || document.querySelector('[aria-label="Availability"]');
+    let availDrop = findFieldByLabel("Availability", "div") || document.querySelector('[aria-label="Availability"]');
+    if (!availDrop) {
+      availDrop = [...document.querySelectorAll('div[role="combobox"], div[role="button"], [aria-haspopup="listbox"], [aria-haspopup="menu"]')]
+        .find(el => {
+          const txt = el.textContent.trim().toLowerCase();
+          return txt.includes("availability") || txt.includes("list as single item") || txt.includes("list as in stock");
+        });
+    }
+    if (!availDrop) {
+      availDrop = [...document.querySelectorAll('span, div')]
+        .find(el => {
+          if (el.offsetParent === null) return false;
+          const txt = el.textContent.trim().toLowerCase();
+          return txt === "availability" || txt === "list as single item" || txt === "list as in stock";
+        });
+    }
     if (availDrop && data.availability) {
-      await selectDropdownOption(availDrop, data.availability);
+      const clickTarget = availDrop.closest('div[role="combobox"], div[role="button"], [aria-haspopup]') || availDrop;
+      await selectDropdownOption(clickTarget, data.availability);
     }
 
     // 8. PRODUCT TAGS
@@ -271,123 +294,44 @@ async function setLocation(location) {
   typeIntoField(locInput, location);
   console.log("[LOCATION] Typed:", location);
 
-  // CRITICAL: Wait for Facebook to fetch suggestions (network request)
-  await sleep(5000);
+  // Wait for Facebook to fetch suggestions
+  await sleep(4000);
 
-  // Step 4: Find the dropdown layer (Facebook creates this outside normal DOM)
-  // It's usually a fixed/absolute positioned div at document level
-  let dropdownLayer = null;
-  let allOptions = [];
-
-  // Try multiple selectors for Facebook's dropdown layer
-  const possibleContainers = [
-    document.querySelector('[role="listbox"]'),
-    document.querySelector('div[data-testid="typeahead-dropdown"]'),
-    document.querySelector('div[aria-label*="Location"][role="dialog"]'),
-    document.querySelector('div[style*="position: fixed"]'),
-    document.querySelector('div[style*="position: absolute"]'),
-    ...document.querySelectorAll('div[role="dialog"]'),
-    ...document.querySelectorAll('div[role="menu"]')
-  ];
-
-  for (const container of possibleContainers) {
-    if (container) {
-      const options = container.querySelectorAll('[role="option"], div[role="button"], li, div');
-      if (options.length > 0) {
-        dropdownLayer = container;
-        allOptions = [...options].filter(el => 
-          el.textContent.trim().length > 0 && el.offsetParent !== null
-        );
-        if (allOptions.length > 0) {
-          console.log("[LOCATION] Found dropdown with", allOptions.length, "options");
-          break;
-        }
-      }
+  // Step 4: Find suggestion options
+  let selectedOption = null;
+  for (let attempt = 0; attempt < 15; attempt++) {
+    const options = [...document.querySelectorAll('[role="option"]')].filter(el => el.offsetParent !== null);
+    if (options.length > 0) {
+      selectedOption = options[0]; // Select first suggestion
+      break;
     }
+    const fallbackOptions = [...document.querySelectorAll('[role="listbox"] div, [role="listbox"] li, div[data-testid="typeahead-dropdown"] div')]
+      .filter(el => el.offsetParent !== null && el.textContent.trim().length > 0);
+    if (fallbackOptions.length > 0) {
+      selectedOption = fallbackOptions[0];
+      break;
+    }
+    await sleep(300);
   }
 
-  // If still not found, search entire document for recently added elements
-  if (!dropdownLayer || allOptions.length === 0) {
-    console.log("[LOCATION] Searching entire document for options...");
-
-    // Facebook sometimes creates dropdown as direct child of body
-    const bodyChildren = [...document.body.children].filter(el => {
-      const style = window.getComputedStyle(el);
-      return (style.position === 'fixed' || style.position === 'absolute') && 
-             el.querySelector('[role="option"], div, span, li');
-    });
-
-    for (const child of bodyChildren) {
-      const options = child.querySelectorAll('[role="option"], div, span, li');
-      const validOptions = [...options].filter(el => 
-        el.textContent.trim().length > 2 && 
-        el.textContent.trim().length < 100 &&
-        el.offsetParent !== null
-      );
-      if (validOptions.length > 0) {
-        dropdownLayer = child;
-        allOptions = validOptions;
-        console.log("[LOCATION] Found body-level dropdown with", validOptions.length, "options");
-        break;
-      }
+  // Step 5: Click the option
+  if (selectedOption) {
+    console.log("[LOCATION] Clicking suggestion:", selectedOption.textContent.trim());
+    selectedOption.scrollIntoView({ behavior: 'instant', block: 'nearest' });
+    await sleep(200);
+    
+    selectedOption.click();
+    selectedOption.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+    selectedOption.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+    
+    const parentOption = selectedOption.closest('[role="option"], li');
+    if (parentOption && parentOption !== selectedOption) {
+      parentOption.click();
+      parentOption.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+      parentOption.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
     }
-  }
-
-  // Step 5: Select the first option
-  if (allOptions.length > 0) {
-    const firstOption = allOptions[0];
-    console.log("[LOCATION] First option:", firstOption.textContent.trim().substring(0, 50));
-
-    // Get the clickable element (sometimes the text is in a child)
-    let clickableEl = firstOption;
-    if (firstOption.children.length > 0) {
-      // Find the deepest child that has text
-      const findTextChild = (el) => {
-        if (el.children.length === 0) return el;
-        for (const child of el.children) {
-          if (child.textContent.trim().length > 0) {
-            return findTextChild(child);
-          }
-        }
-        return el;
-      };
-      clickableEl = findTextChild(firstOption);
-    }
-
-    // Ensure visible and click
-    clickableEl.scrollIntoView({ behavior: 'instant', block: 'nearest' });
-    await sleep(500);
-
-    // NATIVE CLICK with coordinates (bypasses React synthetic events)
-    const rect = clickableEl.getBoundingClientRect();
-    const x = rect.left + rect.width / 2;
-    const y = rect.top + rect.height / 2;
-
-    console.log("[LOCATION] Clicking at:", x, y);
-
-    // Dispatch all mouse events
-    clickableEl.dispatchEvent(new MouseEvent('mousedown', {
-      bubbles: true, cancelable: true, view: window,
-      clientX: x, clientY: y, screenX: x, screenY: y,
-      buttons: 1
-    }));
-    await sleep(100);
-
-    clickableEl.dispatchEvent(new MouseEvent('mouseup', {
-      bubbles: true, cancelable: true, view: window,
-      clientX: x, clientY: y, screenX: x, screenY: y,
-      buttons: 1
-    }));
-    await sleep(100);
-
-    clickableEl.dispatchEvent(new MouseEvent('click', {
-      bubbles: true, cancelable: true, view: window,
-      clientX: x, clientY: y, screenX: x, screenY: y,
-      buttons: 1
-    }));
-    await sleep(800);
-
-    console.log("[LOCATION] Clicked first option");
+    await sleep(1500);
+    console.log("[LOCATION] Selection completed.");
   } else {
     console.log("[LOCATION] No options found, trying keyboard on input...");
 
