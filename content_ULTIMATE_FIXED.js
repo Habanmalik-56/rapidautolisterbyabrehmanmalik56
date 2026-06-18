@@ -42,9 +42,6 @@ async function selectDropdownOption(dropdownEl, optionText) {
   const val = optionText.trim().toLowerCase();
   console.log("[SELECT] Selecting:", optionText, "| val:", val);
 
-  // Facebook category structure: nested menus with sections
-  // We need to find the option text anywhere in the dropdown and click it
-
   for (let retry = 0; retry < 3; retry++) {
     // Step 1: Open dropdown with multiple interaction methods
     dropdownEl.scrollIntoView({ block: "center" });
@@ -74,23 +71,39 @@ async function selectDropdownOption(dropdownEl, optionText) {
     await sleep(3000); // Wait for Facebook React to render dropdown
 
     // Step 2: Find ALL visible text elements in the dropdown
-    // Facebook uses nested divs/spans, not role="option"
-    const allVisibleElements = [...document.querySelectorAll('*')].filter(el => {
-      if (el.offsetParent === null) return false;
-      const rect = el.getBoundingClientRect();
-      // Must be visible and reasonably sized
-      if (rect.width < 20 || rect.height < 10) return false;
-      if (rect.top < 0 || rect.top > window.innerHeight) return false;
-      const txt = (el.innerText || el.textContent || "").trim().toLowerCase();
-      return txt.length > 0 && txt.length < 100;
-    });
+    // Facebook uses nested divs/spans inside role="listbox", role="menu", etc.
+    const dropdownContainers = [
+      ...document.querySelectorAll('[role="listbox"]'),
+      ...document.querySelectorAll('[role="menu"]'),
+      ...document.querySelectorAll('[role="dialog"]'),
+      ...document.querySelectorAll('div[style*="position: absolute"]'),
+      ...document.querySelectorAll('div[style*="position: fixed"]'),
+      document.body
+    ];
+
+    let allVisibleElements = [];
+    for (const container of dropdownContainers) {
+      const els = [...container.querySelectorAll('span, div, li, [role="option"]')].filter(el => {
+        if (el.offsetParent === null) return false;
+        const rect = el.getBoundingClientRect();
+        if (rect.width < 10 || rect.height < 5) return false;
+        const txt = (el.innerText || el.textContent || "").trim().toLowerCase();
+        return txt.length > 0 && txt.length < 80;
+      });
+      if (els.length > 0) {
+        allVisibleElements = els;
+        if (container !== document.body) {
+          console.log("[SELECT] Found options inside container:", container.getAttribute('role') || 'absolute/fixed div');
+          break;
+        }
+      }
+    }
 
     console.log("[SELECT] Scanning", allVisibleElements.length, "visible elements for:", val);
 
     // Step 3: Find matching element
     let target = null;
 
-    // First: exact match on short text elements (most likely to be the option)
     for (const el of allVisibleElements) {
       const txt = (el.innerText || el.textContent || "").trim().toLowerCase();
 
@@ -133,46 +146,78 @@ async function selectDropdownOption(dropdownEl, optionText) {
       target.scrollIntoView({ block: "center" });
       await sleep(800);
 
-      // Find the most clickable ancestor (Facebook wraps text in multiple divs)
-      let clickable = target;
+      // Find deepest text-containing child
+      let clickTarget = target;
+      if (target.children.length > 0) {
+        const deepest = [...target.querySelectorAll('*')].filter(c => {
+          const t = (c.innerText || c.textContent || '').trim();
+          return t.length > 0 && c.children.length === 0;
+        });
+        if (deepest.length > 0) {
+          clickTarget = deepest[0];
+          console.log("[SELECT] Deepest child text element:", clickTarget.tagName, clickTarget.innerText);
+        }
+      }
+
+      // Find clickable ancestor
+      let clickableAncestor = null;
       let parent = target.parentElement;
       for (let i = 0; i < 5 && parent; i++) {
-        if (parent.getAttribute('role') === 'button' || 
+        if (parent.getAttribute('role') === 'option' || 
+            parent.getAttribute('role') === 'button' ||
             parent.getAttribute('tabindex') ||
             parent.tagName === 'BUTTON' ||
-            parent.tagName === 'A' ||
-            parent.onclick ||
-            parent.style.cursor === 'pointer') {
-          clickable = parent;
+            parent.tagName === 'LI' ||
+            parent.tagName === 'A') {
+          clickableAncestor = parent;
           console.log("[SELECT] Found clickable ancestor:", parent.tagName);
           break;
         }
         parent = parent.parentElement;
       }
 
-      // Full interaction sequence
-      clickable.scrollIntoView({ block: "center" });
-      await sleep(500);
-      clickable.focus();
-      await sleep(200);
+      // Dispath sequence
+      const rect = clickTarget.getBoundingClientRect();
+      const clientX = rect.left + rect.width / 2;
+      const clientY = rect.top + rect.height / 2;
+      const eventOpts = { bubbles: true, cancelable: true, view: window, clientX, clientY };
 
-      // Mouse events
-      ["mouseover", "mouseenter", "mousedown", "mouseup", "click"].forEach(type => {
-        clickable.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
-      });
+      const clickFn = (el) => {
+        if (!el) return;
+        el.focus();
+        ['pointerdown', 'mousedown', 'focus', 'pointerup', 'mouseup', 'click'].forEach(type => {
+          let evt;
+          if (type.startsWith('pointer')) {
+            evt = new PointerEvent(type, eventOpts);
+          } else if (type.startsWith('mouse') || type === 'click') {
+            evt = new MouseEvent(type, eventOpts);
+          } else {
+            evt = new Event(type, { bubbles: true, cancelable: true });
+          }
+          el.dispatchEvent(evt);
+        });
+        try { el.click(); } catch(e) {}
+      };
 
-      // Native click
-      try { clickable.click(); } catch(e) {}
+      console.log("[SELECT] Clicking clickTarget...");
+      clickFn(clickTarget);
+
+      if (clickableAncestor && clickableAncestor !== clickTarget) {
+        await sleep(100);
+        console.log("[SELECT] Clicking clickableAncestor...");
+        clickFn(clickableAncestor);
+      }
 
       // Keyboard events as backup
       await sleep(300);
-      clickable.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true, cancelable: true }));
+      const kbTarget = clickableAncestor || clickTarget;
+      kbTarget.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true, cancelable: true }));
       await sleep(100);
-      clickable.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true, cancelable: true }));
+      kbTarget.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true, cancelable: true }));
 
       await sleep(3000);
 
-      // Check if dropdown closed by looking for the dropdown container
+      // Check if closed
       const dropdownOpen = document.querySelector('[role="listbox"]') || 
                            document.querySelector('[role="menu"]') ||
                            document.querySelector('div[style*="position: absolute"]') ||
@@ -183,8 +228,7 @@ async function selectDropdownOption(dropdownEl, optionText) {
         return true;
       }
 
-      console.log("[SELECT] Dropdown still open, may need another click");
-      // Try clicking again on the target directly
+      console.log("[SELECT] Dropdown still open, clicking target directly...");
       try { target.click(); } catch(e) {}
       await sleep(2000);
       return true;
