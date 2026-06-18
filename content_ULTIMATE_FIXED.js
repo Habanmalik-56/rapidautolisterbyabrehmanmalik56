@@ -93,7 +93,6 @@ async function selectDropdownOption(dropdownEl, optionText) {
   console.error("[SELECT] Failed:", optionText);
   return false;
 }
-}
 
 function waitForElement(selectorFn, timeoutMs = 15000) {
   return new Promise((resolve, reject) => {
@@ -703,6 +702,37 @@ async function runPublishActionInline() {
   console.log("[PUBLISH] Inline publish complete.");
 }
 // ============================================================
+// COLLECT_AND_PUBLISH — message listener for selling page
+// Background sends this to tell us to scroll & collect drafts
+// ============================================================
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.action === "COLLECT_AND_PUBLISH") {
+    console.log("[CONTENT] COLLECT_AND_PUBLISH received — scrolling for drafts...");
+    // Inject UI feedback on selling page if box exists
+    const statusEl = document.getElementById("publish-status-text");
+    if (statusEl) statusEl.textContent = "Collecting all drafts...";
+
+    loadAllDrafts().then(allDrafts => {
+      console.log("[CONTENT] Collected", allDrafts.length, "draft URLs");
+      const urls = allDrafts.map(d => d.url);
+
+      if (statusEl) statusEl.textContent = `Found ${urls.length} draft(s). Publishing in background...`;
+
+      chrome.runtime.sendMessage({
+        action: "DRAFT_URLS_COLLECTED",
+        urls
+      });
+    }).catch(err => {
+      console.error("[CONTENT] Draft collection failed:", err);
+      chrome.runtime.sendMessage({ action: "DRAFT_URLS_COLLECTED", urls: [] });
+    });
+
+    sendResponse({ status: "collecting" });
+    return true;
+  }
+});
+
+// ============================================================
 // MAIN INIT — runs on page load
 // ============================================================
 async function init() {
@@ -721,11 +751,28 @@ async function init() {
     });
 
   } else if (url.includes("/marketplace/you/selling")) {
-    // Phase 2: inject publish panel on selling page
+    // Phase 2: inject publish panel on selling page (for status display)
     injectPublishBox();
+
+  } else if (url.includes("/marketplace/edit/")) {
+    // Phase 3: Auto-publish if opened by background AI Publish system
+    chrome.runtime.sendMessage({ action: "CHECK_AUTO_PUBLISH" }, async (res) => {
+      if (res && res.isPublishTab) {
+        console.log("[INIT] This is a background AI Publish tab — auto-publishing...");
+        await sleep(4000); // wait for the edit page to fully render
+        try {
+          await runPublishActionInline();
+          console.log("[INIT] Auto-publish complete — notifying background.");
+          chrome.runtime.sendMessage({ action: "PUBLISH_COMPLETE_V2", success: true });
+        } catch (err) {
+          console.error("[INIT] Auto-publish failed:", err.message);
+          chrome.runtime.sendMessage({ action: "PUBLISH_COMPLETE_V2", success: false });
+        }
+      } else {
+        console.log("[INIT] Edit page opened manually — not auto-publishing.");
+      }
+    });
   }
-  // NOTE: /marketplace/edit is now handled INLINE via publishSingleDraftInline()
-  // No more tab switching! Everything stays on the selling page.
 }
 
 init();

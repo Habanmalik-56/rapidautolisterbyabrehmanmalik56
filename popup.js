@@ -1,40 +1,51 @@
+// ============================================================
+// RAPID LISTER PRO — popup.js
+// ============================================================
+
 // Elements
 const tabButtons = document.querySelectorAll(".tab-btn");
-const tabPanes = document.querySelectorAll(".tab-pane");
+const tabPanes   = document.querySelectorAll(".tab-pane");
 
-const imageDropzone = document.getElementById("image-dropzone");
-const imageInput = document.getElementById("image-input");
+const imageDropzone    = document.getElementById("image-dropzone");
+const imageInput       = document.getElementById("image-input");
 const imagePreviewGrid = document.getElementById("image-preview-grid");
 
-const titleInput = document.getElementById("listing-title");
-const titleCharCount = document.getElementById("title-char-count");
-const priceInput = document.getElementById("listing-price");
-const qtyInput = document.getElementById("listing-quantity");
-const categorySelect = document.getElementById("listing-category");
-const conditionSelect = document.getElementById("listing-condition");
-const availabilitySelect = document.getElementById("listing-availability");
-const descTextarea = document.getElementById("listing-description");
-const descCharCount = document.getElementById("desc-char-count");
-const tagsInput = document.getElementById("listing-tags");
-const numListingsInput = document.getElementById("num-listings");
+const titleInput        = document.getElementById("listing-title");
+const titleCharCount    = document.getElementById("title-char-count");
+const priceInput        = document.getElementById("listing-price");
+const qtyInput          = document.getElementById("listing-quantity");
+const categorySelect    = document.getElementById("listing-category");
+const conditionSelect   = document.getElementById("listing-condition");
+const availabilitySelect= document.getElementById("listing-availability");
+const descTextarea      = document.getElementById("listing-description");
+const descCharCount     = document.getElementById("desc-char-count");
+const tagsInput         = document.getElementById("listing-tags");
+const numListingsInput  = document.getElementById("num-listings");
 
-const saveDataBtn = document.getElementById("save-data-btn");
+const saveDataBtn     = document.getElementById("save-data-btn");
 const startListingBtn = document.getElementById("start-listing-btn");
-const clearAllBtn = document.getElementById("clear-all-btn");
-
-const detectDraftsBtn = document.getElementById("detect-drafts-btn");
-const draftsList = document.getElementById("drafts-list");
+const clearAllBtn     = document.getElementById("clear-all-btn");
 
 const customLocationsText = document.getElementById("custom-locations-text");
-const saveLocationsBtn = document.getElementById("save-locations-btn");
+const saveLocationsBtn    = document.getElementById("save-locations-btn");
 
-const statusDot = document.getElementById("status-dot");
+// AI Publish elements
+const startAIPublishBtn    = document.getElementById("start-ai-publish-btn");
+const stopAIPublishBtn     = document.getElementById("stop-ai-publish-btn");
+const popupStatusText      = document.getElementById("popup-status-text");
+const popupProgressCounter = document.getElementById("popup-progress-counter");
+const popupProgressBar     = document.getElementById("popup-progress-bar");
+
+const statusDot  = document.getElementById("status-dot");
 const statusText = document.getElementById("status-text");
-const statusMsg = document.getElementById("status-msg");
+const statusMsg  = document.getElementById("status-msg");
 
-let loadedImages = []; // base64 images
+let loadedImages = [];
+let publishPollInterval = null;
 
-// Initialize
+// ============================================================
+// INITIALIZE
+// ============================================================
 document.addEventListener("DOMContentLoaded", () => {
   initTabs();
   initDragAndDrop();
@@ -45,28 +56,33 @@ document.addEventListener("DOMContentLoaded", () => {
   checkCurrentJobState();
 });
 
-// Tab Switcher
+// ============================================================
+// TAB SWITCHER
+// ============================================================
 function initTabs() {
   tabButtons.forEach(btn => {
     btn.addEventListener("click", () => {
       tabButtons.forEach(b => b.classList.remove("active"));
       tabPanes.forEach(p => p.classList.remove("active"));
-      
+
       btn.classList.add("active");
       const targetPane = document.getElementById(btn.dataset.tab);
       if (targetPane) targetPane.classList.add("active");
 
-      if (btn.dataset.tab === "draft-opener") {
-        loadDraftsList();
+      if (btn.dataset.tab === "ai-publish") {
+        // Refresh publish state whenever user opens AI Publish tab
+        updatePublishProgress();
       }
     });
   });
 }
 
-// Drag & Drop
+// ============================================================
+// DRAG & DROP
+// ============================================================
 function initDragAndDrop() {
   imageDropzone.addEventListener("click", () => imageInput.click());
-  
+
   imageDropzone.addEventListener("dragover", (e) => {
     e.preventDefault();
     imageDropzone.classList.add("dragover");
@@ -111,7 +127,6 @@ function renderImages() {
     imagePreviewGrid.appendChild(item);
   });
 
-  // Attach delete events
   document.querySelectorAll(".delete-img-btn").forEach(btn => {
     btn.addEventListener("click", (e) => {
       const idx = parseInt(e.target.dataset.index);
@@ -121,7 +136,9 @@ function renderImages() {
   });
 }
 
-// Char Counters
+// ============================================================
+// CHAR COUNTERS
+// ============================================================
 function initCharCounters() {
   titleInput.addEventListener("input", () => {
     titleCharCount.textContent = titleInput.value.length;
@@ -131,34 +148,34 @@ function initCharCounters() {
   });
 }
 
-// Save Data Button
+// ============================================================
+// DATA ENTRY BUTTONS
+// ============================================================
 saveDataBtn.addEventListener("click", async () => {
   const listingData = getFormData();
   await chrome.storage.local.set({ draftListing: listingData });
   showStatus("Success", "Draft listing saved locally!");
 });
 
-// Clear All Button
 clearAllBtn.addEventListener("click", async () => {
-  titleInput.value = "";
-  priceInput.value = "";
-  qtyInput.value = "1";
-  categorySelect.value = "";
-  conditionSelect.value = "New";
+  titleInput.value       = "";
+  priceInput.value       = "";
+  qtyInput.value         = "1";
+  categorySelect.value   = "";
+  conditionSelect.value  = "New";
   availabilitySelect.value = "List as single item";
-  descTextarea.value = "";
-  tagsInput.value = "";
+  descTextarea.value     = "";
+  tagsInput.value        = "";
   numListingsInput.value = "1";
-  loadedImages = [];
+  loadedImages           = [];
   titleCharCount.textContent = "0";
-  descCharCount.textContent = "0";
+  descCharCount.textContent  = "0";
   imagePreviewGrid.innerHTML = "";
-  
+
   await chrome.storage.local.remove("draftListing");
   showStatus("Idle", "Form and draft cleared.");
 });
 
-// Start Bulk Listing Button
 startListingBtn.addEventListener("click", async () => {
   const data = getFormData();
   if (!data.title || !data.price) {
@@ -170,11 +187,7 @@ startListingBtn.addEventListener("click", async () => {
     return;
   }
 
-  // Trigger background bulk lister
-  chrome.runtime.sendMessage({
-    action: "START_BULK_LISTING",
-    data: data
-  }, (response) => {
+  chrome.runtime.sendMessage({ action: "START_BULK_LISTING", data }, (response) => {
     if (response && response.status === "started") {
       showStatus("Running", "Bulk listing started...");
     }
@@ -183,16 +196,16 @@ startListingBtn.addEventListener("click", async () => {
 
 function getFormData() {
   return {
-    title: titleInput.value,
-    price: priceInput.value,
-    quantity: qtyInput.value,
-    category: categorySelect.value,
-    condition: conditionSelect.value,
+    title:        titleInput.value,
+    price:        priceInput.value,
+    quantity:     qtyInput.value,
+    category:     categorySelect.value,
+    condition:    conditionSelect.value,
     availability: availabilitySelect.value,
-    description: descTextarea.value,
-    tags: tagsInput.value,
-    numListings: numListingsInput.value,
-    images: loadedImages
+    description:  descTextarea.value,
+    tags:         tagsInput.value,
+    numListings:  numListingsInput.value,
+    images:       loadedImages
   };
 }
 
@@ -200,19 +213,19 @@ async function loadSavedData() {
   const res = await chrome.storage.local.get("draftListing");
   if (res.draftListing) {
     const data = res.draftListing;
-    titleInput.value = data.title || "";
-    priceInput.value = data.price || "";
-    qtyInput.value = data.quantity || "1";
-    categorySelect.value = data.category || "";
-    conditionSelect.value = data.condition || "New";
-    availabilitySelect.value = data.availability || "List as single item";
-    descTextarea.value = data.description || "";
-    tagsInput.value = data.tags || "";
-    numListingsInput.value = data.numListings || "1";
-    
+    titleInput.value        = data.title        || "";
+    priceInput.value        = data.price        || "";
+    qtyInput.value          = data.quantity     || "1";
+    categorySelect.value    = data.category     || "";
+    conditionSelect.value   = data.condition    || "New";
+    availabilitySelect.value= data.availability || "List as single item";
+    descTextarea.value      = data.description  || "";
+    tagsInput.value         = data.tags         || "";
+    numListingsInput.value  = data.numListings  || "1";
+
     titleCharCount.textContent = titleInput.value.length;
-    descCharCount.textContent = descTextarea.value.length;
-    
+    descCharCount.textContent  = descTextarea.value.length;
+
     if (data.images) {
       loadedImages = data.images;
       renderImages();
@@ -221,42 +234,14 @@ async function loadSavedData() {
   }
 }
 
-// Draft List Pane
-detectDraftsBtn.addEventListener("click", () => loadDraftsList());
-
-async function loadDraftsList() {
-  draftsList.innerHTML = "";
-  const res = await chrome.storage.local.get("draftListing");
-  if (res.draftListing) {
-    const data = res.draftListing;
-    const li = document.createElement("li");
-    li.className = "draft-item";
-    li.innerHTML = `
-      <div class="draft-info">
-        <div class="draft-title">${data.title || "Untitled Listing"}</div>
-        <div class="draft-meta">$${data.price || "0"} - ${data.category || "No category"}</div>
-      </div>
-      <button class="btn btn-outline-cyan btn-sm resume-draft-btn">Resume</button>
-    `;
-    draftsList.appendChild(li);
-
-    li.querySelector(".resume-draft-btn").addEventListener("click", () => {
-      loadSavedData();
-      // Switch back to data entry tab
-      document.querySelector('[data-tab="data-entry"]').click();
-    });
-  } else {
-    draftsList.innerHTML = `<li class="empty-state">No drafts found.</li>`;
-  }
-}
-
-// Locations Pane
+// ============================================================
+// LOCATIONS
+// ============================================================
 async function loadCustomLocations() {
   const result = await chrome.storage.local.get("customLocations");
   if (result.customLocations && Array.isArray(result.customLocations)) {
     customLocationsText.value = result.customLocations.join("\n");
   } else {
-    // Populate with a clean default list if nothing is saved
     const defaults = ["New York, NY", "Los Angeles, CA", "Chicago, IL"];
     customLocationsText.value = defaults.join("\n");
     await chrome.storage.local.set({ customLocations: defaults });
@@ -266,31 +251,100 @@ async function loadCustomLocations() {
 saveLocationsBtn.addEventListener("click", async () => {
   const text = customLocationsText.value.trim();
   const locations = text.split("\n").map(l => l.trim()).filter(Boolean);
-  
+
   if (locations.length === 0) {
     showStatus("Error", "Please enter at least one location!");
     return;
   }
-  
+
   await chrome.storage.local.set({ customLocations: locations });
   showStatus("Success", "Custom locations list saved!");
 });
 
-// Status and Messages updates
+// ============================================================
+// AI PUBLISH SECTION
+// ============================================================
+
+// Start AI Publish
+startAIPublishBtn.addEventListener("click", () => {
+  showStatus("Running", "AI Publish starting...");
+  if (popupStatusText) popupStatusText.textContent = "🚀 Initializing — opening selling page...";
+
+  chrome.runtime.sendMessage({ action: "START_AI_PUBLISH" }, (response) => {
+    if (response && response.status === "started") {
+      showStatus("Running", "AI Publish started in background!");
+      startPublishPolling();
+    }
+  });
+});
+
+// Stop AI Publish
+stopAIPublishBtn.addEventListener("click", () => {
+  chrome.runtime.sendMessage({ action: "STOP_AI_PUBLISH" });
+  showStatus("Idle", "AI Publish stopped.");
+  if (popupStatusText) popupStatusText.textContent = "⏹ Stopped by user.";
+  stopPublishPolling();
+});
+
+// Start polling for progress
+function startPublishPolling() {
+  stopPublishPolling();
+  updatePublishProgress(); // immediate
+  publishPollInterval = setInterval(updatePublishProgress, 1500);
+}
+
+// Stop polling
+function stopPublishPolling() {
+  if (publishPollInterval) {
+    clearInterval(publishPollInterval);
+    publishPollInterval = null;
+  }
+}
+
+// Fetch and display publish progress from background
+function updatePublishProgress() {
+  chrome.runtime.sendMessage({ action: "GET_PUBLISH_STATE" }, (state) => {
+    if (!state) return;
+
+    if (popupStatusText) {
+      popupStatusText.textContent = state.statusText || "...";
+    }
+
+    const total = state.totalDrafts  || 0;
+    const done  = state.currentIndex || 0;
+
+    if (popupProgressCounter) {
+      popupProgressCounter.textContent = `${done} / ${total}`;
+    }
+    if (popupProgressBar) {
+      const pct = total > 0 ? (done / total) * 100 : 0;
+      popupProgressBar.style.width = `${pct}%`;
+    }
+
+    // Auto-stop polling when done
+    if (!state.running && !state.collecting) {
+      stopPublishPolling();
+      if (total > 0 && done >= total) {
+        showStatus("Success", state.statusText || "All drafts published!");
+      } else if (done > 0) {
+        showStatus("Idle", state.statusText || "Publish stopped.");
+      }
+    }
+  });
+}
+
+// ============================================================
+// STATUS BAR
+// ============================================================
 function showStatus(type, msg) {
   statusText.textContent = type;
-  statusMsg.textContent = msg;
+  statusMsg.textContent  = msg;
 
   statusDot.className = "pulsing-dot";
-  if (type === "Running") {
-    statusDot.classList.add("running");
-  } else if (type === "Success") {
-    statusDot.classList.add("success");
-  } else if (type === "Error") {
-    statusDot.classList.add("error");
-  } else {
-    statusDot.classList.add("idle");
-  }
+  if (type === "Running")       statusDot.classList.add("running");
+  else if (type === "Success")  statusDot.classList.add("success");
+  else if (type === "Error")    statusDot.classList.add("error");
+  else                          statusDot.classList.add("idle");
 }
 
 function listenToStatusUpdates() {
@@ -303,6 +357,7 @@ function listenToStatusUpdates() {
 }
 
 async function checkCurrentJobState() {
+  // Check bulk listing (Phase 1) state
   chrome.runtime.sendMessage({ action: "GET_STATE" }, (state) => {
     if (state && state.activeJob) {
       showStatus("Running", `Autofilling: ${state.createdCount}/${state.totalToCreate}`);
@@ -313,6 +368,27 @@ async function checkCurrentJobState() {
           showStatus(type, res.lastStatus.message);
         }
       });
+    }
+  });
+
+  // Check AI Publish (Phase 2) state — resume polling if active
+  chrome.runtime.sendMessage({ action: "GET_PUBLISH_STATE" }, (state) => {
+    if (!state) return;
+
+    if (state.running || state.collecting) {
+      // Still running — resume polling
+      showStatus("Running", state.statusText || "Publishing...");
+      startPublishPolling();
+    } else if (state.statusText) {
+      // Restore last known status in AI Publish tab
+      if (popupStatusText)      popupStatusText.textContent = state.statusText;
+      const total = state.totalDrafts  || 0;
+      const done  = state.currentIndex || 0;
+      if (popupProgressCounter) popupProgressCounter.textContent = `${done} / ${total}`;
+      if (popupProgressBar) {
+        const pct = total > 0 ? (done / total) * 100 : 0;
+        popupProgressBar.style.width = `${pct}%`;
+      }
     }
   });
 }

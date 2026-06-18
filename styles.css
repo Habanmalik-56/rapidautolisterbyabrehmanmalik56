@@ -572,6 +572,83 @@ textarea {
   height: 12px;
 }
 
+/* AI Publish Section */
+.ai-badge {
+  background: linear-gradient(90deg, #8b5cf6, #06b6d4);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 3px 9px;
+  border-radius: 20px;
+  letter-spacing: 0.5px;
+  box-shadow: 0 0 10px rgba(139, 92, 246, 0.5);
+}
+
+.ai-status-box {
+  background: rgba(6, 182, 212, 0.08);
+  border: 1px solid rgba(6, 182, 212, 0.25);
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 12px;
+  margin-bottom: 16px;
+  color: var(--text-primary);
+  line-height: 1.6;
+}
+
+.ai-status-label {
+  font-weight: 700;
+  color: var(--neon-cyan);
+  margin-right: 6px;
+}
+
+.ai-progress-wrap {
+  margin-bottom: 4px;
+}
+
+.ai-progress-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.ai-progress-track {
+  width: 100%;
+  height: 10px;
+  background: #151522;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+}
+
+#popup-progress-bar {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #06b6d4, #8b5cf6);
+  border-radius: 6px;
+  transition: width 0.4s ease;
+  box-shadow: 0 0 8px rgba(6, 182, 212, 0.5);
+}
+
+.ai-info-box {
+  margin-top: 16px;
+  background: rgba(139, 92, 246, 0.07);
+  border: 1px solid rgba(139, 92, 246, 0.2);
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+
+.ai-info-box strong {
+  color: var(--neon-cyan);
+}
+
 /* Animations */
 @keyframes rotateGlow {
   0% { transform: rotate(0deg); }

@@ -26,7 +26,7 @@
     <!-- Tabs Navigation -->
     <nav class="tabs-nav">
       <button class="tab-btn active" data-tab="data-entry">Data Entry</button>
-      <button class="tab-btn" data-tab="draft-opener">Draft Opener</button>
+      <button class="tab-btn" data-tab="ai-publish">AI Publish</button>
       <button class="tab-btn" data-tab="locations">Locations</button>
     </nav>
 
@@ -137,18 +137,40 @@
         </div>
       </section>
 
-      <!-- Draft Opener Tab -->
-      <section id="draft-opener" class="tab-pane">
+      <!-- AI Publish Tab -->
+      <section id="ai-publish" class="tab-pane">
         <div class="pane-header">
-          <h3>Local Storage Drafts</h3>
-          <button id="detect-drafts-btn" class="btn btn-gradient btn-sm">Detect Drafts</button>
+          <h3>AI Auto Publish</h3>
+          <span class="ai-badge">🤖 AI</span>
         </div>
-        <p class="section-desc">Manage or resume listings that you have previously saved.</p>
-        <div class="draft-list-container">
-          <ul id="drafts-list" class="drafts-list">
-            <!-- Dynamically populated -->
-            <li class="empty-state">No drafts found. Fill data and save data to see draft list.</li>
-          </ul>
+        <p class="section-desc">Automatically detect &amp; publish ALL your saved Facebook Marketplace drafts in the background — no tab switching needed!</p>
+
+        <!-- Status Box -->
+        <div class="ai-status-box">
+          <span class="ai-status-label">Status:</span>
+          <span id="popup-status-text">Idle — click Start to begin</span>
+        </div>
+
+        <!-- Progress Bar -->
+        <div class="ai-progress-wrap">
+          <div class="ai-progress-labels">
+            <span>Published</span>
+            <span id="popup-progress-counter">0 / 0</span>
+          </div>
+          <div class="ai-progress-track">
+            <div id="popup-progress-bar"></div>
+          </div>
+        </div>
+
+        <!-- Buttons -->
+        <div class="action-buttons" style="margin-top: 16px;">
+          <button id="start-ai-publish-btn" class="btn btn-gradient">▶&nbsp; Start AI Publish</button>
+          <button id="stop-ai-publish-btn" class="btn btn-outline-red">■&nbsp; Stop</button>
+        </div>
+
+        <!-- Info Box -->
+        <div class="ai-info-box">
+          <p>ℹ️ The extension will open each draft in the background, click <strong>Next</strong> then <strong>Publish</strong> automatically. Make sure you have saved drafts on Facebook Marketplace first.</p>
         </div>
       </section>
 
