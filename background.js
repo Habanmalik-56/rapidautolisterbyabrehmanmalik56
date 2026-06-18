@@ -12,7 +12,8 @@ let state = {
   listingsData: null,
   completedTabs: 0,
   totalBatchesNeeded: 0,
-  currentBatchIndex: 0
+  currentBatchIndex: 0,
+  batchOpening: false
 };
 
 async function saveState() {
@@ -139,6 +140,7 @@ async function processNextBatch() {
   const currentBatchSize = Math.min(state.batchSize, remaining);
   state.currentBatchTabs = [];
   state.completedTabs = 0;
+  state.batchOpening = true;
   await saveState();
 
   updateProgress(
@@ -172,6 +174,8 @@ async function processNextBatch() {
     await sleep(2000);
   }
 
+  state.batchOpening = false;
+  await saveState();
   chrome.alarms.create("batchTimeout", { delayInMinutes: 5 });
 }
 
@@ -189,7 +193,6 @@ async function handleDraftSaved(tabId) {
   if (!state.currentBatchTabs.includes(tabId)) return;
 
   state.createdCount++;
-  state.completedTabs++;
   await saveState();
 
   updateProgress(
@@ -198,11 +201,27 @@ async function handleDraftSaved(tabId) {
   );
   await chrome.storage.local.remove(`pendingAutofill_${tabId}`);
 
-  if (state.completedTabs >= state.currentBatchTabs.length) {
-    chrome.alarms.clear("batchTimeout");
-    await handleBatchCompletion();
-  }
+  // Close the tab immediately. This will trigger onRemoved.
+  try { await chrome.tabs.remove(tabId); } catch (e) {}
 }
+
+chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
+  const result = await chrome.storage.local.get("bulkState");
+  if (result.bulkState) {
+    state = { ...state, ...result.bulkState };
+  }
+
+  if (state.activeJob && state.currentBatchTabs.includes(tabId)) {
+    console.log("[BG] Tab removed from active batch:", tabId);
+    state.currentBatchTabs = state.currentBatchTabs.filter(id => id !== tabId);
+    await saveState();
+
+    if (state.currentBatchTabs.length === 0 && !state.batchOpening) {
+      chrome.alarms.clear("batchTimeout");
+      await handleBatchCompletion();
+    }
+  }
+});
 
 async function handleBatchCompletion() {
   state.currentBatchIndex++;

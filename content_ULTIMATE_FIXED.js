@@ -394,7 +394,7 @@ async function runPhase1(data) {
       findFieldByLabel("Title", "input") || document.querySelector('input[type="text"][maxlength="100"]')
     );
     typeIntoField(titleInput, data.title);
-    await sleep(500);
+    await sleep(150);
 
     // 3. PRICE
     console.log("Step 3: Filling Price");
@@ -402,7 +402,7 @@ async function runPhase1(data) {
       document.querySelector('input[type="text"][inputmode="numeric"]') ||
       document.querySelector('input[inputmode="numeric"]');
     typeIntoField(priceInput, data.price);
-    await sleep(500);
+    await sleep(150);
 
     // 4. CATEGORY
     console.log("Step 4: Selecting Category");
@@ -415,15 +415,15 @@ async function runPhase1(data) {
         console.warn("[CATEGORY] Primary select failed, trying fallback...");
         // Fallback: try clicking the dropdown again and using keyboard
         categoryDrop.click();
-        await sleep(2000);
+        await sleep(1000);
         // Type first letter to jump to category
         const firstLetter = data.category.charAt(0).toLowerCase();
         categoryDrop.dispatchEvent(new KeyboardEvent('keydown', { key: firstLetter, code: 'Key' + firstLetter.toUpperCase(), keyCode: firstLetter.charCodeAt(0), bubbles: true }));
-        await sleep(1000);
+        await sleep(500);
         categoryDrop.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
-        await sleep(3000);
+        await sleep(1500);
       }
-      await sleep(4000);
+      await sleep(1200);
     } else {
       console.warn("[CATEGORY] Dropdown not found — skipping");
     }
@@ -435,7 +435,7 @@ async function runPhase1(data) {
     );
     if (conditionDrop && data.condition) {
       await selectDropdownOption(conditionDrop, data.condition);
-      await sleep(2000);
+      await sleep(800);
     } else {
       console.warn("[CONDITION] Dropdown not found — skipping");
     }
@@ -448,7 +448,7 @@ async function runPhase1(data) {
       document.querySelector('textarea');
     if (descTextarea) {
       typeIntoField(descTextarea, data.description);
-      await sleep(500);
+      await sleep(150);
     }
 
     // 7. AVAILABILITY
@@ -458,7 +458,7 @@ async function runPhase1(data) {
     );
     if (availDrop && data.availability) {
       await selectDropdownOption(availDrop, data.availability);
-      await sleep(2000);
+      await sleep(800);
     } else {
       console.warn("[AVAILABILITY] Dropdown not found — skipping");
     }
@@ -473,9 +473,9 @@ async function runPhase1(data) {
       const tags = data.tags.split(',').map(t => t.trim()).filter(Boolean);
       for (const tag of tags) {
         typeIntoField(tagsInput, tag);
-        await sleep(300);
+        await sleep(80);
         tagsInput.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Enter', code: 'Enter', keyCode: 13 }));
-        await sleep(300);
+        await sleep(80);
       }
     }
 
@@ -487,21 +487,21 @@ async function runPhase1(data) {
         document.querySelector('[aria-label="Cantidad" i]');
       if (qtyInput) {
         typeIntoField(qtyInput, data.quantity);
-        await sleep(500);
+        await sleep(150);
       }
     }
 
     // 10. LOCATION
     if (data.location) {
       console.log("Step 10: Setting location...");
-      await sleep(500);
+      await sleep(150);
       const locSuccess = await setLocation(data.location);
       if (!locSuccess) {
         console.warn("[LOCATION] setLocation returned false, retrying once...");
-        await sleep(2000);
+        await sleep(1000);
         await setLocation(data.location);
       }
-      await sleep(1000);
+      await sleep(400);
     }
 
     // 11. SAVE DRAFT
