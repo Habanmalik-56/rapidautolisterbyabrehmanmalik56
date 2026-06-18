@@ -15,17 +15,31 @@ let state = {
   currentBatchIndex: 0
 };
 
+async function saveState() {
+  await chrome.storage.local.set({ bulkState: state });
+}
+
 // ============================================================
 // SINGLE UNIFIED MESSAGE LISTENER
 // ============================================================
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  handleMessageAsync(message, sender, sendResponse);
+  return true;
+});
+
+async function handleMessageAsync(message, sender, sendResponse) {
+  // Always load latest state from storage first!
+  const result = await chrome.storage.local.get("bulkState");
+  if (result.bulkState) {
+    state = { ...state, ...result.bulkState };
+  }
 
   if (message.action === "START_BULK_LISTING") {
-    startBulkListing(message.data);
+    await startBulkListing(message.data);
     sendResponse({ status: "started" });
 
   } else if (message.action === "DRAFT_SAVED") {
-    handleDraftSaved(sender.tab.id);
+    await handleDraftSaved(sender.tab.id);
     sendResponse({ status: "acknowledged" });
 
   } else if (message.action === "GET_MY_PENDING_DATA") {
@@ -33,13 +47,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     chrome.storage.local.get([key], (result) => {
       sendResponse({ data: result[key] || null });
     });
-    return true;
 
   } else if (message.action === "GET_STATE") {
     sendResponse(state);
 
   } else if (message.action === "STOP_BULK_LISTING") {
-    stopBulkListing();
+    await stopBulkListing();
     sendResponse({ status: "stopped" });
 
   // ---- AI PUBLISH SYSTEM V2 ----
@@ -63,7 +76,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     chrome.storage.local.get("publishQueue", (result) => {
       sendResponse(result.publishQueue || null);
     });
-    return true;
 
   } else if (message.action === "CHECK_AUTO_PUBLISH") {
     chrome.storage.local.get("publishQueue", (result) => {
@@ -72,7 +84,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       console.log("[BG] CHECK_AUTO_PUBLISH tab:", sender.tab.id, "| activeTabId:", queue && queue.activeTabId, "| match:", isPublishTab);
       sendResponse({ isPublishTab });
     });
-    return true;
 
   // ---- LEGACY (backward compat) ----
   } else if (message.action === "START_BACKGROUND_PUBLISH") {
@@ -85,9 +96,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message.action === "PUBLISH_COMPLETE") {
     sendResponse({ status: "acknowledged" });
   }
-
-  return true;
-});
+}
 
 // ============================================================
 // BULK LISTING (Phase 1 — Create Drafts)
@@ -105,6 +114,7 @@ async function startBulkListing(data) {
   state.currentBatchIndex = 0;
   state.totalBatchesNeeded = Math.ceil(state.totalToCreate / state.batchSize);
 
+  await saveState();
   updateProgress("Starting bulk listing process...", 0);
   await processNextBatch();
 }
@@ -122,13 +132,14 @@ async function processNextBatch() {
 
   const remaining = state.totalToCreate - state.createdCount;
   if (remaining <= 0) {
-    finishPhase1();
+    await finishPhase1();
     return;
   }
 
   const currentBatchSize = Math.min(state.batchSize, remaining);
   state.currentBatchTabs = [];
   state.completedTabs = 0;
+  await saveState();
 
   updateProgress(
     `Opening batch ${state.currentBatchIndex + 1}/${state.totalBatchesNeeded}...`,
@@ -155,6 +166,7 @@ async function processNextBatch() {
     });
 
     state.currentBatchTabs.push(tab.id);
+    await saveState();
     const key = `pendingAutofill_${tab.id}`;
     await chrome.storage.local.set({ [key]: listingPayload });
     await sleep(2000);
@@ -178,6 +190,7 @@ async function handleDraftSaved(tabId) {
 
   state.createdCount++;
   state.completedTabs++;
+  await saveState();
 
   updateProgress(
     `Draft saved: ${state.createdCount}/${state.totalToCreate}`,
@@ -187,7 +200,7 @@ async function handleDraftSaved(tabId) {
 
   if (state.completedTabs >= state.currentBatchTabs.length) {
     chrome.alarms.clear("batchTimeout");
-    handleBatchCompletion();
+    await handleBatchCompletion();
   }
 }
 
@@ -200,12 +213,13 @@ async function handleBatchCompletion() {
   }
   state.currentBatchTabs = [];
   state.completedTabs = 0;
+  await saveState();
 
   if (remaining > 0) {
     updateProgress(`Batch done. Opening next...`, (state.createdCount / state.totalToCreate) * 100);
     await processNextBatch();
   } else {
-    finishPhase1();
+    await finishPhase1();
   }
 }
 
@@ -226,6 +240,7 @@ async function finishPhase1() {
 
   state.activeJob = false;
   state.currentBatchTabs = [];
+  await saveState();
 
   // Open selling page
   chrome.tabs.create({
@@ -234,7 +249,7 @@ async function finishPhase1() {
   });
 }
 
-function stopBulkListing() {
+async function stopBulkListing() {
   state.activeJob = false;
   chrome.alarms.clear("batchTimeout");
 
@@ -245,6 +260,7 @@ function stopBulkListing() {
     } catch (e) {}
   }
   state.currentBatchTabs = [];
+  await saveState();
   updateProgress("Bulk listing stopped.", 0);
 }
 

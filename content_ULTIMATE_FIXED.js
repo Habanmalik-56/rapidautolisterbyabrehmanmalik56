@@ -63,8 +63,27 @@ async function selectDropdownOption(dropdownEl, optionText) {
       const txt = (el.innerText || el.textContent || "")
         .trim()
         .toLowerCase();
+      const val = optionText.trim().toLowerCase();
 
-      return txt === optionText.trim().toLowerCase();
+      // Exact match
+      if (txt === val) return true;
+
+      // Condition mappings
+      if (val === 'new' && (txt === 'nuevo' || txt.includes('new'))) return true;
+      if (val === 'used - like new' && (txt.includes('como nuevo') || txt.includes('like new'))) return true;
+      if (val === 'used - very good' && (txt.includes('muy buen') || txt.includes('buen estado') || txt.includes('very good'))) return true;
+      if (val === 'used - good' && (txt.includes('buen estado') || txt.includes('aceptable') || txt.includes('good'))) return true;
+      if (val === 'used - fair' && (txt.includes('aceptable') || txt.includes('regular') || txt.includes('fair'))) return true;
+
+      // Availability mappings
+      if (val.includes('single item') && (txt.includes('único') || txt.includes('single'))) return true;
+      if (val.includes('in stock') && (txt.includes('disponible') || txt.includes('stock'))) return true;
+
+      // Category mappings
+      const mapped = categoryTranslations[val];
+      if (mapped && mapped.some(m => txt.includes(m) || m.includes(txt))) return true;
+
+      return false;
     });
 
     if (target) {
@@ -114,21 +133,76 @@ function waitForElement(selectorFn, timeoutMs = 15000) {
   });
 }
 
-function findFieldByLabel(labelText, tagName = 'input') {
-  let el = document.querySelector(`${tagName}[aria-label="${labelText}"]`);
-  if (el) return el;
+const labelTranslations = {
+  "title": ["title", "título", "titulo"],
+  "price": ["price", "precio"],
+  "category": ["category", "categoría", "categoria"],
+  "condition": ["condition", "estado"],
+  "description": ["description", "descripción", "descripcion"],
+  "availability": ["availability", "disponibilidad"],
+  "product tags": ["product tags", "tags", "etiquetas de productos", "etiquetas"],
+  "quantity": ["quantity", "cantidad"],
+  "location": ["location", "ubicación", "ciudad", "donde estás", "dónde estás"]
+};
 
-  const label = [...document.querySelectorAll('label')].find(l =>
-    l.textContent.toLowerCase().includes(labelText.toLowerCase())
-  );
-  if (label) {
-    el = label.querySelector(tagName);
+const categoryTranslations = {
+  "tools": ["herramientas", "tools"],
+  "furniture": ["muebles", "furniture"],
+  "household": ["artículos para el hogar", "hogar", "household"],
+  "garden": ["jardín", "jardin", "garden"],
+  "appliances": ["electrodomésticos", "appliances"],
+  "video games": ["videojuegos", "video games"],
+  "books, movies & music": ["libros, películas y música", "libros", "books"],
+  "bags & luggage": ["bolsos y maletas", "equipaje", "bags"],
+  "clothing & shoes": ["ropa y calzado", "prendas", "clothing"],
+  "jewelry & accessories": ["joyería y accesorios", "joyas", "jewelry"],
+  "health & beauty": ["salud y belleza", "health", "beauty"],
+  "pet supplies": ["artículos para mascotas", "mascotas", "pet"],
+  "baby & kids": ["artículos para bebés y niños", "bebés", "baby"],
+  "toys & games": ["juguetes y juegos", "juguetes", "toys"],
+  "electronics & computers": ["electrónica e informática", "electrónicos", "electronics"],
+  "mobile phones": ["teléfonos móviles", "celulares", "mobile"],
+  "bicycles": ["bicicletas", "bicycles"],
+  "auto parts": ["autopartes", "repuestos", "piezas de autos", "auto parts"],
+  "sports & outdoors": ["deportes y actividades al aire libre", "deportes", "sports"],
+  "musical instruments": ["instrumentos musicales", "musical"],
+  "antiques & collectibles": ["antigüedades y coleccionables", "antigüedades", "antiques"],
+  "garage sale": ["ventas de garaje", "garage sale"],
+  "miscellaneous": ["varios", "miscelánea", "miscellaneous"]
+};
+
+function findFieldByLabel(labelText, tagName = 'input') {
+  const normalizedKey = labelText.toLowerCase();
+  const searchTerms = labelTranslations[normalizedKey] || [normalizedKey];
+
+  for (const term of searchTerms) {
+    // 1. Exact attribute match
+    let el = document.querySelector(`${tagName}[aria-label="${term}"]`);
+    if (el) return el;
+
+    // 2. Case-insensitive attribute match
+    el = [...document.querySelectorAll(tagName)].find(item => {
+      const aria = (item.getAttribute('aria-label') || '').toLowerCase();
+      return aria === term || aria.includes(term);
+    });
+    if (el) return el;
+
+    // 3. Label text match
+    const label = [...document.querySelectorAll('label')].find(l =>
+      l.textContent.toLowerCase().includes(term)
+    );
+    if (label) {
+      el = label.querySelector(tagName);
+      if (el) return el;
+    }
+
+    // 4. Placeholder match
+    el = [...document.querySelectorAll(tagName)].find(item => {
+      const ph = (item.placeholder || '').toLowerCase();
+      return ph.includes(term);
+    });
     if (el) return el;
   }
-
-  el = document.querySelector(`[placeholder*="${labelText}"]`);
-  if (el) return el;
-
   return null;
 }
 
@@ -272,10 +346,13 @@ async function setLocation(location) {
 
   const locInput = await waitForElement(() => {
     return document.querySelector('input[aria-label="Location"]') ||
+      document.querySelector('input[aria-label="Ubicación"]') ||
       document.querySelector('input[placeholder*="location" i]') ||
+      document.querySelector('input[placeholder*="ubicación" i]') ||
       document.querySelector('input[placeholder*="city" i]') ||
+      document.querySelector('input[placeholder*="ciudad" i]') ||
       [...document.querySelectorAll('input')].find(el =>
-        /location|city|zip/i.test(el.getAttribute('aria-label') || el.placeholder || '')
+        /location|ubicación|ubicacion|city|ciudad|zip/i.test(el.getAttribute('aria-label') || el.placeholder || '')
       );
   }, 10000);
 
