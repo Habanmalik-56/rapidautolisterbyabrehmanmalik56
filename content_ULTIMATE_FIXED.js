@@ -56,7 +56,13 @@ async function selectDropdownOption(dropdownEl, optionText) {
 
     const options = [
       ...document.querySelectorAll('[role="option"]'),
-      ...document.querySelectorAll('[role="menuitem"]')
+      ...document.querySelectorAll('[role="menuitem"]'),
+      ...document.querySelectorAll('[role="listbox"] span'),
+      ...document.querySelectorAll('[role="listbox"] div'),
+      ...document.querySelectorAll('[role="listbox"] [role="button"]'),
+      ...document.querySelectorAll('[role="dialog"] span'),
+      ...document.querySelectorAll('[role="dialog"] div'),
+      ...document.querySelectorAll('div[class*="x1i10hfl"]')
     ].filter(el => el.offsetParent !== null);
 
     const target = options.find(el => {
@@ -176,11 +182,11 @@ function findFieldByLabel(labelText, tagName = 'input') {
   const searchTerms = labelTranslations[normalizedKey] || [normalizedKey];
 
   for (const term of searchTerms) {
-    // 1. Exact attribute match
-    let el = document.querySelector(`${tagName}[aria-label="${term}"]`);
+    // 1. Exact or case-insensitive attribute match
+    let el = document.querySelector(`${tagName}[aria-label="${term}" i]`);
     if (el) return el;
 
-    // 2. Case-insensitive attribute match
+    // 2. Case-insensitive attribute match fallback
     el = [...document.querySelectorAll(tagName)].find(item => {
       const aria = (item.getAttribute('aria-label') || '').toLowerCase();
       return aria === term || aria.includes(term);
@@ -197,10 +203,7 @@ function findFieldByLabel(labelText, tagName = 'input') {
     }
 
     // 4. Placeholder match
-    el = [...document.querySelectorAll(tagName)].find(item => {
-      const ph = (item.placeholder || '').toLowerCase();
-      return ph.includes(term);
-    });
+    el = document.querySelector(`${tagName}[placeholder*="${term}" i]`);
     if (el) return el;
   }
   return null;
