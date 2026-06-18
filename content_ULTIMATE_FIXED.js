@@ -569,22 +569,43 @@ async function setLocation(location) {
   typeIntoField(locInput, location);
   console.log("[LOCATION] Typed:", location);
 
+  // Wait for suggestion list to populate
   await sleep(4000);
 
   let selectedOption = null;
-  for (let attempt = 0; attempt < 20; attempt++) {
-    const options = [
+  for (let attempt = 0; attempt < 15; attempt++) {
+    const searchParts = location.toLowerCase().split(',').map(p => p.trim()).filter(Boolean);
+
+    const candidates = [
       ...document.querySelectorAll('[role="option"]'),
       ...document.querySelectorAll('[role="listbox"] li'),
-      ...document.querySelectorAll('[role="listbox"] div')
-    ].filter(el =>
-      el.offsetParent !== null &&
-      (el.innerText || el.textContent || "").trim().length > 0
-    );
+      ...document.querySelectorAll('[role="listbox"] div'),
+      ...document.querySelectorAll('div[role="button"]'),
+      ...document.querySelectorAll('div[role="gridcell"]'),
+      ...document.querySelectorAll('span, div')
+    ].filter(el => {
+      if (el.offsetParent === null) return false;
+      const rect = el.getBoundingClientRect();
+      if (rect.width < 10 || rect.height < 5) return false;
+      if (el.tagName === 'INPUT' || el.querySelector('input')) return false;
 
-    if (options.length > 0) {
-      selectedOption = options[0]; // ALWAYS FIRST SUGGESTION
-      console.log("[LOCATION] First suggestion found:", selectedOption.innerText);
+      const txt = (el.innerText || el.textContent || "").trim().toLowerCase();
+      if (txt.length === 0 || txt.length > 150) return false;
+
+      // Check if it contains any of the search parts
+      return searchParts.some(part => txt.includes(part));
+    });
+
+    // Sort by text length ascending so we get the leaf/most specific element containing the text
+    candidates.sort((a, b) => {
+      const aLen = (a.innerText || a.textContent || "").trim().length;
+      const bLen = (b.innerText || b.textContent || "").trim().length;
+      return aLen - bLen;
+    });
+
+    if (candidates.length > 0) {
+      selectedOption = candidates[0];
+      console.log("[LOCATION] Match found:", selectedOption.innerText, "| tag:", selectedOption.tagName);
       break;
     }
 
@@ -595,40 +616,80 @@ async function setLocation(location) {
     selectedOption.scrollIntoView({ block: "center" });
     await sleep(500);
 
-    ["mouseover", "mousedown", "mouseup", "click"].forEach(type => {
-      selectedOption.dispatchEvent(
-        new MouseEvent(type, {
-          bubbles: true,
-          cancelable: true,
-          view: window
-        })
-      );
-    });
+    // Find deepest child text element
+    let clickTarget = selectedOption;
+    if (selectedOption.children.length > 0) {
+      const deepest = [...selectedOption.querySelectorAll('*')].filter(c => {
+        const t = (c.innerText || c.textContent || '').trim();
+        return t.length > 0 && c.children.length === 0;
+      });
+      if (deepest.length > 0) {
+        clickTarget = deepest[0];
+      }
+    }
+
+    // Find clickable ancestor
+    let clickableAncestor = null;
+    let parent = selectedOption.parentElement;
+    for (let i = 0; i < 5 && parent; i++) {
+      if (parent.getAttribute('role') === 'option' || 
+          parent.getAttribute('role') === 'button' ||
+          parent.getAttribute('tabindex') ||
+          parent.tagName === 'BUTTON' ||
+          parent.tagName === 'LI') {
+        clickableAncestor = parent;
+        break;
+      }
+      parent = parent.parentElement;
+    }
+
+    const rect = clickTarget.getBoundingClientRect();
+    const clientX = rect.left + rect.width / 2;
+    const clientY = rect.top + rect.height / 2;
+    const eventOpts = { bubbles: true, cancelable: true, view: window, clientX, clientY };
+
+    const clickFn = (el) => {
+      if (!el) return;
+      el.focus();
+      ['pointerdown', 'mousedown', 'focus', 'pointerup', 'mouseup', 'click'].forEach(type => {
+        let evt;
+        if (type.startsWith('pointer')) {
+          evt = new PointerEvent(type, eventOpts);
+        } else if (type.startsWith('mouse') || type === 'click') {
+          evt = new MouseEvent(type, eventOpts);
+        } else {
+          evt = new Event(type, { bubbles: true, cancelable: true });
+        }
+        el.dispatchEvent(evt);
+      });
+      try { el.click(); } catch(e) {}
+    };
+
+    console.log("[LOCATION] Clicking target...");
+    clickFn(clickTarget);
+
+    if (clickableAncestor && clickableAncestor !== clickTarget) {
+      await sleep(100);
+      console.log("[LOCATION] Clicking clickableAncestor...");
+      clickFn(clickableAncestor);
+    }
+    
+    if (selectedOption !== clickTarget && selectedOption !== clickableAncestor) {
+      await sleep(100);
+      console.log("[LOCATION] Clicking selectedOption...");
+      clickFn(selectedOption);
+    }
 
     await sleep(2000);
     console.log("[LOCATION] Done.");
   } else {
     // Keyboard fallback
-    await sleep(3000);
-    locInput.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "ArrowDown",
-        code: "ArrowDown",
-        keyCode: 40,
-        bubbles: true
-      })
-    );
-    await sleep(1000);
-    locInput.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "Enter",
-        code: "Enter",
-        keyCode: 13,
-        bubbles: true
-      })
-    );
+    console.warn("[LOCATION] No option matched text, trying keyboard fallback...");
     await sleep(2000);
-    console.log("[LOCATION] Used keyboard fallback");
+    locInput.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", code: "ArrowDown", keyCode: 40, bubbles: true }));
+    await sleep(500);
+    locInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, bubbles: true }));
+    await sleep(2000);
   }
 
   return true;
