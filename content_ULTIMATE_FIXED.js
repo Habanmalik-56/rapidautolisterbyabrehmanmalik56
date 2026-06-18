@@ -39,83 +39,128 @@ async function uploadPhoto(base64Image, filename) {
 async function selectDropdownOption(dropdownEl, optionText) {
   if (!dropdownEl || !optionText) return false;
 
+  const val = optionText.trim().toLowerCase();
   console.log("[SELECT] Selecting:", optionText);
 
+  function matchesOption(el) {
+    const txt = (el.innerText || el.textContent || "").trim().toLowerCase();
+    if (!txt || txt.length > 100) return false;
+
+    // Exact match
+    if (txt === val) return true;
+
+    // Condition mappings
+    if (val === 'new' && (txt === 'nuevo' || txt === 'new')) return true;
+    if (val === 'used - like new' && (txt.includes('como nuevo') || txt.includes('like new'))) return true;
+    if (val === 'used - very good' && (txt.includes('muy buen') || txt.includes('very good'))) return true;
+    if (val === 'used - good' && (txt === 'good' || txt === 'buen estado' || txt === 'aceptable')) return true;
+    if (val === 'used - fair' && (txt === 'fair' || txt === 'regular' || txt === 'aceptable')) return true;
+
+    // Availability mappings
+    if (val.includes('single') && (txt.includes('único') || txt === 'single')) return true;
+    if (val.includes('stock') && (txt.includes('disponible') || txt.includes('stock'))) return true;
+
+    // Category: check English exact match
+    if (txt === val) return true;
+
+    // Category: check translation map
+    const mapped = categoryTranslations[val];
+    if (mapped) {
+      for (const m of mapped) {
+        if (txt === m) return true;
+        if (txt.includes(m) && txt.length < 60) return true;
+      }
+    }
+
+    // Partial match for longer category names
+    if (txt.includes(val) && txt.length < 60) return true;
+    if (val.includes(txt) && txt.length > 3) return true;
+
+    return false;
+  }
+
   for (let retry = 0; retry < 3; retry++) {
+    // Step 1: Click to open dropdown
     dropdownEl.scrollIntoView({ block: "center" });
-    dropdownEl.click();
+    await sleep(500);
 
-    dropdownEl.dispatchEvent(
-      new MouseEvent("mousedown", {
-        bubbles: true,
-        cancelable: true
-      })
+    // Full interaction sequence to open dropdown
+    dropdownEl.focus();
+    await sleep(200);
+    ["mousedown", "mouseup", "click"].forEach(type =>
+      dropdownEl.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }))
     );
+    dropdownEl.click();
+    await sleep(3000); // Wait longer for React to render dropdown
 
-    await sleep(2500);
-
-    const options = [
+    // Step 2: Find matching option — comprehensive search
+    let allOptions = [
       ...document.querySelectorAll('[role="option"]'),
       ...document.querySelectorAll('[role="menuitem"]'),
-      ...document.querySelectorAll('[role="listbox"] span'),
-      ...document.querySelectorAll('[role="listbox"] div'),
-      ...document.querySelectorAll('[role="listbox"] [role="button"]'),
-      ...document.querySelectorAll('[role="dialog"] span'),
-      ...document.querySelectorAll('[role="dialog"] div'),
-      ...document.querySelectorAll('div[class*="x1i10hfl"]')
+      ...document.querySelectorAll('[data-value]'),
+      ...document.querySelectorAll('ul li'),
+      ...document.querySelectorAll('[class*="x1"] [role="none"]'),
+      ...document.querySelectorAll('div[tabindex]'),
     ].filter(el => el.offsetParent !== null);
 
-    const target = options.find(el => {
-      const txt = (el.innerText || el.textContent || "")
-        .trim()
-        .toLowerCase();
-      const val = optionText.trim().toLowerCase();
+    let target = allOptions.find(matchesOption);
 
-      // 1. Condition mappings
-      if (val === 'new' && (txt === 'nuevo' || txt === 'new')) return true;
-      if (val === 'used - like new' && (txt === 'como nuevo' || txt === 'usado: como nuevo' || txt === 'like new' || txt.includes('como nuevo'))) return true;
-      if (val === 'used - very good' && (txt === 'muy buen estado' || txt === 'buen estado' || txt === 'usado: muy buen estado' || txt === 'very good' || txt.includes('buen estado'))) return true;
-      if (val === 'used - good' && (txt === 'buen estado' || txt === 'aceptable' || txt === 'usado: buen estado' || txt === 'good' || txt.includes('buen estado'))) return true;
-      if (val === 'used - fair' && (txt === 'aceptable' || txt === 'regular' || txt === 'usado: regular' || txt === 'fair' || txt.includes('aceptable'))) return true;
-
-      // 2. Availability mappings
-      if (val.includes('single') && (txt === 'único' || txt === 'single' || txt.includes('único') || txt.includes('single'))) return true;
-      if (val.includes('stock') && (txt === 'disponible' || txt === 'stock' || txt.includes('disponible') || txt.includes('stock'))) return true;
-
-      // 3. Category mappings (with strict length limit to avoid parent container match)
-      if (txt === val) return true;
-      const mapped = categoryTranslations[val];
-      if (mapped && mapped.some(m => txt === m || txt.includes(m))) {
-        if (txt.length < 50) return true;
-      }
-
-      return false;
-    });
+    // Step 3: Deep fallback — search ALL visible elements with text
+    if (!target) {
+      console.log("[SELECT] Fallback: searching all visible elements...");
+      const all = [...document.querySelectorAll('span, div, li, a, button')]
+        .filter(el => {
+          if (el.offsetParent === null) return false;
+          const t = (el.innerText || el.textContent || "").trim();
+          return t.length > 0 && t.length < 100;
+        });
+      target = all.find(matchesOption);
+    }
 
     if (target) {
-      console.log("[SELECT] Found:", target.innerText);
-
+      console.log("[SELECT] Found:", `"${target.innerText.trim()}"`, target.tagName);
       target.scrollIntoView({ block: "center" });
-      await sleep(400);
+      await sleep(800);
 
-      target.click();
+      // Method 1: Full mouse event sequence on the element
+      for (const el of [target, target.closest('[role="option"]'), target.closest('li'), target.closest('[tabindex]')]) {
+        if (!el) continue;
+        ["mouseover", "mouseenter", "mousedown", "mouseup", "click"].forEach(type => {
+          el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+        });
+        try { el.click(); } catch(e) {}
+      }
 
-      target.dispatchEvent(
-        new MouseEvent("click", {
-          bubbles: true,
-          cancelable: true
-        })
-      );
+      await sleep(3000);
 
-      await sleep(2000);
+      // Check if dropdown closed (option selected)
+      const dropdownStillOpen = document.querySelector('[role="listbox"]') || 
+                                 document.querySelector('[role="menu"]') ||
+                                 document.querySelector('ul[role="listbox"]');
+      if (!dropdownStillOpen) {
+        console.log("[SELECT] Dropdown closed — option selected successfully");
+        return true;
+      }
+
+      // If dropdown still open, try keyboard fallback
+      console.log("[SELECT] Dropdown still open, trying keyboard...");
+      target.focus();
+      await sleep(300);
+      target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true, cancelable: true }));
+      await sleep(300);
+      target.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true, cancelable: true }));
+      await sleep(3000);
       return true;
     }
 
-    console.warn("[SELECT] Retry:", retry + 1);
+    console.warn("[SELECT] No match found, retry", retry + 1, "of 3");
+
+    // Close dropdown if open (press Escape)
+    dropdownEl.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
     await sleep(1500);
   }
 
-  console.error("[SELECT] Failed:", optionText);
+  console.error("[SELECT] FAILED to find option:", optionText);
   return false;
 }
 
@@ -210,6 +255,46 @@ function findFieldByLabel(labelText, tagName = 'input') {
 }
 
 // ============================================================
+// FIND DROPDOWN BY ITS VISIBLE PLACEHOLDER TEXT
+// Facebook Marketplace dropdowns show their label as visible text
+// inside the button (e.g. "Category", "Condition"). We scan all
+// interactive elements and find one whose text matches our keywords.
+// ============================================================
+async function findDropdownByPlaceholderText(keywords, timeoutMs = 8000) {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    // All candidate interactive elements
+    const candidates = [
+      ...document.querySelectorAll('[role="combobox"]'),
+      ...document.querySelectorAll('[role="button"]'),
+      ...document.querySelectorAll('[aria-haspopup="listbox"]'),
+      ...document.querySelectorAll('[aria-haspopup="true"]'),
+      ...document.querySelectorAll('div[tabindex="0"]'),
+      ...document.querySelectorAll('select'),
+    ].filter(el => el.offsetParent !== null);
+
+    for (const el of candidates) {
+      const txt = (el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.innerText || el.textContent || '')
+        .trim()
+        .toLowerCase();
+
+      for (const kw of keywords) {
+        if (txt === kw || txt.startsWith(kw) || txt.includes(kw)) {
+          console.log(`[DROPDOWN FINDER] Found "${kw}" in element:`, el.tagName, `"${txt}"`);
+          return el;
+        }
+      }
+    }
+
+    await sleep(500);
+  }
+
+  console.warn("[DROPDOWN FINDER] Not found for keywords:", keywords);
+  return null;
+}
+
+// ============================================================
 // PHASE 1: CREATE DRAFTS (autofill form)
 // ============================================================
 async function runPhase1(data) {
@@ -242,23 +327,35 @@ async function runPhase1(data) {
 
     // 4. CATEGORY
     console.log("Step 4: Selecting Category");
-    const categoryDrop = findFieldByLabel("Category", "div") || document.querySelector('[aria-label="Category"]');
+    // Find the Category dropdown by looking for any interactive element whose visible text is "Category"
+    const categoryDrop = await findDropdownByPlaceholderText(
+      ["category", "categoría", "categoria"]
+    );
     if (categoryDrop && data.category) {
       await selectDropdownOption(categoryDrop, data.category);
       await sleep(4000);
+    } else {
+      console.warn("[CATEGORY] Dropdown not found — skipping");
     }
 
     // 5. CONDITION
     console.log("Step 5: Selecting Condition");
-    const conditionDrop = findFieldByLabel("Condition", "div") || document.querySelector('[aria-label="Condition"]');
+    const conditionDrop = await findDropdownByPlaceholderText(
+      ["condition", "estado", "condición"]
+    );
     if (conditionDrop && data.condition) {
       await selectDropdownOption(conditionDrop, data.condition);
+      await sleep(2000);
+    } else {
+      console.warn("[CONDITION] Dropdown not found — skipping");
     }
 
     // 6. DESCRIPTION
     console.log("Step 6: Filling Description");
     const descTextarea = findFieldByLabel("Description", "textarea") ||
-      document.querySelector('textarea[aria-label="Description"]');
+      document.querySelector('textarea[aria-label="Description" i]') ||
+      document.querySelector('textarea[aria-label="Descripción" i]') ||
+      document.querySelector('textarea');
     if (descTextarea) {
       typeIntoField(descTextarea, data.description);
       await sleep(500);
@@ -266,24 +363,22 @@ async function runPhase1(data) {
 
     // 7. AVAILABILITY
     console.log("Step 7: Selecting Availability");
-    let availDrop = findFieldByLabel("Availability", "div") || document.querySelector('[aria-label="Availability"]');
-    if (!availDrop) {
-      availDrop = [...document.querySelectorAll('div[role="combobox"], div[role="button"], [aria-haspopup="listbox"]')]
-        .find(el => {
-          const txt = el.textContent.trim().toLowerCase();
-          return txt.includes("availability") || txt.includes("list as single item") || txt.includes("list as in stock");
-        });
-    }
+    const availDrop = await findDropdownByPlaceholderText(
+      ["availability", "disponibilidad", "list as single", "single item", "listed"]
+    );
     if (availDrop && data.availability) {
-      const clickTarget = availDrop.closest('div[role="combobox"], div[role="button"], [aria-haspopup]') || availDrop;
-      await selectDropdownOption(clickTarget, data.availability);
+      await selectDropdownOption(availDrop, data.availability);
+      await sleep(2000);
+    } else {
+      console.warn("[AVAILABILITY] Dropdown not found — skipping");
     }
 
     // 8. PRODUCT TAGS
     console.log("Step 8: Adding Product Tags");
     const tagsInput = findFieldByLabel("Product tags", "textarea") ||
       findFieldByLabel("Tags", "input") ||
-      document.querySelector('[aria-label="Product tags"] textarea');
+      document.querySelector('[aria-label="Product tags" i] textarea') ||
+      document.querySelector('[aria-label="Etiquetas" i] textarea');
     if (tagsInput && data.tags) {
       const tags = data.tags.split(',').map(t => t.trim()).filter(Boolean);
       for (const tag of tags) {
@@ -297,7 +392,9 @@ async function runPhase1(data) {
     // 9. QUANTITY
     if (data.quantity && parseInt(data.quantity) > 1) {
       console.log("Step 9: Filling Quantity");
-      const qtyInput = findFieldByLabel("Quantity", "input") || document.querySelector('[aria-label="Quantity"]');
+      const qtyInput = findFieldByLabel("Quantity", "input") ||
+        document.querySelector('[aria-label="Quantity" i]') ||
+        document.querySelector('[aria-label="Cantidad" i]');
       if (qtyInput) {
         typeIntoField(qtyInput, data.quantity);
         await sleep(500);
@@ -364,27 +461,46 @@ async function setLocation(location) {
     return false;
   }
 
-  locInput.click();
+  // Step 1: Focus and clear input properly
+  locInput.scrollIntoView({ block: "center" });
   await sleep(500);
+  locInput.click();
+  await sleep(300);
   locInput.focus();
   await sleep(300);
 
+  // Step 2: Clear using native setter
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
   setter.call(locInput, '');
   locInput.dispatchEvent(new Event('input', { bubbles: true }));
-  await sleep(300);
+  await sleep(500);
 
-  typeIntoField(locInput, location);
+  // Step 3: Type character by character with proper events
+  const text = String(location);
+  for (const char of text) {
+    setter.call(locInput, locInput.value + char);
+    locInput.dispatchEvent(new InputEvent('input', { bubbles: true, data: char, inputType: 'insertText' }));
+    await sleep(50); // Small delay between characters
+  }
+
+  // Step 4: Trigger change and key events to activate dropdown
+  locInput.dispatchEvent(new Event('change', { bubbles: true }));
+  locInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', code: 'End', keyCode: 35, bubbles: true }));
+  await sleep(100);
+  locInput.dispatchEvent(new KeyboardEvent('keyup', { key: 'End', code: 'End', keyCode: 35, bubbles: true }));
+
   console.log("[LOCATION] Typed:", location);
+  await sleep(4000); // Wait for suggestions to appear
 
-  await sleep(4000);
-
+  // Step 5: Try to select first suggestion via mouse click
   let selectedOption = null;
   for (let attempt = 0; attempt < 20; attempt++) {
     const options = [
       ...document.querySelectorAll('[role="option"]'),
       ...document.querySelectorAll('[role="listbox"] li'),
-      ...document.querySelectorAll('[role="listbox"] div')
+      ...document.querySelectorAll('[role="listbox"] div'),
+      ...document.querySelectorAll('ul li'),
+      ...document.querySelectorAll('[class*="x1"] div'),
     ].filter(el =>
       el.offsetParent !== null &&
       (el.innerText || el.textContent || "").trim().length > 0
@@ -392,7 +508,7 @@ async function setLocation(location) {
 
     if (options.length > 0) {
       selectedOption = options[0]; // ALWAYS FIRST SUGGESTION
-      console.log("[LOCATION] First suggestion found:", selectedOption.innerText);
+      console.log("[LOCATION] First suggestion found:", selectedOption.innerText || selectedOption.textContent);
       break;
     }
 
@@ -401,9 +517,10 @@ async function setLocation(location) {
 
   if (selectedOption) {
     selectedOption.scrollIntoView({ block: "center" });
-    await sleep(500);
+    await sleep(800);
 
-    ["mouseover", "mousedown", "mouseup", "click"].forEach(type => {
+    // Full mouse interaction sequence
+    ["mouseover", "mouseenter", "mousedown", "mouseup", "click"].forEach(type => {
       selectedOption.dispatchEvent(
         new MouseEvent(type, {
           bubbles: true,
@@ -412,31 +529,60 @@ async function setLocation(location) {
         })
       );
     });
+    try { selectedOption.click(); } catch(e) {}
 
-    await sleep(2000);
-    console.log("[LOCATION] Done.");
-  } else {
-    // Keyboard fallback
     await sleep(3000);
+    console.log("[LOCATION] Done via mouse click.");
+  } else {
+    // Step 6: Keyboard fallback - MOST RELIABLE for Facebook
+    console.log("[LOCATION] No suggestion found via mouse, using keyboard fallback...");
+    locInput.focus();
+    await sleep(1000);
+
+    // Press ArrowDown to open/select first suggestion
     locInput.dispatchEvent(
       new KeyboardEvent("keydown", {
         key: "ArrowDown",
         code: "ArrowDown",
         keyCode: 40,
-        bubbles: true
+        bubbles: true,
+        cancelable: true
       })
     );
-    await sleep(1000);
+    await sleep(100);
+    locInput.dispatchEvent(
+      new KeyboardEvent("keyup", {
+        key: "ArrowDown",
+        code: "ArrowDown",
+        keyCode: 40,
+        bubbles: true,
+        cancelable: true
+      })
+    );
+    await sleep(1500);
+
+    // Press Enter to select
     locInput.dispatchEvent(
       new KeyboardEvent("keydown", {
         key: "Enter",
         code: "Enter",
         keyCode: 13,
-        bubbles: true
+        bubbles: true,
+        cancelable: true
       })
     );
-    await sleep(2000);
-    console.log("[LOCATION] Used keyboard fallback");
+    await sleep(100);
+    locInput.dispatchEvent(
+      new KeyboardEvent("keyup", {
+        key: "Enter",
+        code: "Enter",
+        keyCode: 13,
+        bubbles: true,
+        cancelable: true
+      })
+    );
+    await sleep(3000);
+    console.log("[LOCATION] Done via keyboard fallback.");
   }
 
   return true;
