@@ -7,7 +7,7 @@ let state = {
   activeJob: false,
   totalToCreate: 0,
   createdCount: 0,
-  batchSize: 10,
+  batchSize: 5,
   currentBatchTabs: [],
   listingsData: null,
   completedTabs: 0,
@@ -242,11 +242,25 @@ async function finishPhase1() {
   state.currentBatchTabs = [];
   await saveState();
 
-  // Open selling page
-  chrome.tabs.create({
-    url: "https://www.facebook.com/marketplace/you/selling",
-    active: true
-  });
+  // Find existing selling page and reload it, or create a new one
+  try {
+    const existing = await chrome.tabs.query({ url: "*://*.facebook.com/marketplace/you/selling*" });
+    if (existing.length > 0) {
+      const targetTab = existing[0];
+      await chrome.tabs.update(targetTab.id, { active: true });
+      await chrome.tabs.reload(targetTab.id);
+    } else {
+      await chrome.tabs.create({
+        url: "https://www.facebook.com/marketplace/you/selling",
+        active: true
+      });
+    }
+  } catch (e) {
+    chrome.tabs.create({
+      url: "https://www.facebook.com/marketplace/you/selling",
+      active: true
+    });
+  }
 }
 
 async function stopBulkListing() {
