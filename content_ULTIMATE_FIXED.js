@@ -525,8 +525,13 @@ async function runPhase1(data) {
       }
     }
 
-    await sleep(3000);
-    chrome.runtime.sendMessage({ action: "DRAFT_SAVED" });
+    await sleep(4000);
+    chrome.runtime.sendMessage({ action: "DRAFT_SAVED" }, (response) => {
+      if (response && response.nextUrl) {
+        console.log("[CONTENT] Reusing tab, redirecting to next listing...");
+        window.location.href = response.nextUrl;
+      }
+    });
 
   } catch (error) {
     console.error("Autofill process failed:", error);
@@ -1080,6 +1085,15 @@ async function init() {
         const images = (storage.draftListing && storage.draftListing.images) || [];
         const fullData = { ...res.data, images };
         runPhase1(fullData);
+      }
+    });
+
+  } else if (url.includes("/marketplace/create")) {
+    // If we land on the choose listing page, but have pending data, redirect to /item
+    chrome.runtime.sendMessage({ action: "GET_MY_PENDING_DATA" }, (res) => {
+      if (res && res.data) {
+        console.log("[INIT] Redirecting to item creation form...");
+        window.location.href = "https://www.facebook.com/marketplace/create/item";
       }
     });
 

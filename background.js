@@ -102,22 +102,50 @@ async function handleMessageAsync(message, sender, sendResponse) {
 // ============================================================
 // BULK LISTING (Phase 1 — Create Drafts)
 // ============================================================
+// ============================================================
+// BULK LISTING (Phase 1 — Create Drafts)
+// ============================================================
 async function startBulkListing(data) {
   state.activeJob = true;
   state.totalToCreate = parseInt(data.numListings) || 1;
   state.createdCount = 0;
+  state.assignedCount = 0;
 
   const { images, ...textData } = data;
   state.listingsData = textData;
-
   state.currentBatchTabs = [];
-  state.completedTabs = 0;
-  state.currentBatchIndex = 0;
-  state.totalBatchesNeeded = Math.ceil(state.totalToCreate / state.batchSize);
 
   await saveState();
   updateProgress("Starting bulk listing process...", 0);
-  await processNextBatch();
+
+  const initialTabsCount = Math.min(state.batchSize, state.totalToCreate);
+  const locations = await getLocationsList();
+
+  for (let i = 0; i < initialTabsCount; i++) {
+    if (!state.activeJob) return;
+
+    const locationIndex = state.assignedCount % locations.length;
+    const location = locations[locationIndex];
+
+    const listingPayload = {
+      ...state.listingsData,
+      location,
+      listingIndex: state.assignedCount
+    };
+
+    const tab = await chrome.tabs.create({
+      url: "https://www.facebook.com/marketplace/create/item",
+      active: false
+    });
+
+    state.currentBatchTabs.push(tab.id);
+    state.assignedCount++;
+    await saveState();
+
+    const key = `pendingAutofill_${tab.id}`;
+    await chrome.storage.local.set({ [key]: listingPayload });
+    await sleep(2000);
+  }
 }
 
 async function getLocationsList() {
@@ -128,69 +156,8 @@ async function getLocationsList() {
   return ["New York, NY"];
 }
 
-async function processNextBatch() {
-  if (!state.activeJob) return;
-
-  const remaining = state.totalToCreate - state.createdCount;
-  if (remaining <= 0) {
-    await finishPhase1();
-    return;
-  }
-
-  const currentBatchSize = Math.min(state.batchSize, remaining);
-  state.currentBatchTabs = [];
-  state.completedTabs = 0;
-  state.batchOpening = true;
-  await saveState();
-
-  updateProgress(
-    `Opening batch ${state.currentBatchIndex + 1}/${state.totalBatchesNeeded}...`,
-    (state.createdCount / state.totalToCreate) * 100
-  );
-
-  const locations = await getLocationsList();
-
-  for (let i = 0; i < currentBatchSize; i++) {
-    if (!state.activeJob) return;
-
-    const locationIndex = (state.createdCount + i) % locations.length;
-    const location = locations[locationIndex];
-
-    const listingPayload = {
-      ...state.listingsData,
-      location,
-      listingIndex: state.createdCount + i
-    };
-
-    const tab = await chrome.tabs.create({
-      url: "https://www.facebook.com/marketplace/create/item",
-      active: false
-    });
-
-    state.currentBatchTabs.push(tab.id);
-    await saveState();
-    const key = `pendingAutofill_${tab.id}`;
-    await chrome.storage.local.set({ [key]: listingPayload });
-    await sleep(2000);
-  }
-
-  state.batchOpening = false;
-  await saveState();
-  chrome.alarms.create("batchTimeout", { delayInMinutes: 5 });
-}
-
-chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === "batchTimeout") {
-    if (state.activeJob && state.completedTabs < state.currentBatchTabs.length) {
-      updateProgress("Batch timeout. Progressing anyway.", (state.createdCount / state.totalToCreate) * 100);
-      handleBatchCompletion();
-    }
-  }
-});
-
 async function handleDraftSaved(tabId) {
-  if (!state.activeJob) return;
-  if (!state.currentBatchTabs.includes(tabId)) return;
+  if (!state.activeJob) return { close: true };
 
   state.createdCount++;
   await saveState();
@@ -201,8 +168,38 @@ async function handleDraftSaved(tabId) {
   );
   await chrome.storage.local.remove(`pendingAutofill_${tabId}`);
 
-  // Close the tab immediately. This will trigger onRemoved.
-  try { await chrome.tabs.remove(tabId); } catch (e) {}
+  // Check if we have more listings to assign
+  if (state.assignedCount < state.totalToCreate) {
+    const locations = await getLocationsList();
+    const locationIndex = state.assignedCount % locations.length;
+    const location = locations[locationIndex];
+
+    const listingPayload = {
+      ...state.listingsData,
+      location,
+      listingIndex: state.assignedCount
+    };
+
+    state.assignedCount++;
+    await saveState();
+
+    const key = `pendingAutofill_${tabId}`;
+    await chrome.storage.local.set({ [key]: listingPayload });
+
+    // Tell content script to reuse the tab
+    return { nextUrl: "https://www.facebook.com/marketplace/create/item" };
+  } else {
+    // No more listings to assign. Close this tab.
+    state.currentBatchTabs = state.currentBatchTabs.filter(id => id !== tabId);
+    await saveState();
+
+    try { await chrome.tabs.remove(tabId); } catch (e) {}
+
+    if (state.currentBatchTabs.length === 0 || state.createdCount >= state.totalToCreate) {
+      await finishPhase1();
+    }
+    return { close: true };
+  }
 }
 
 chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
@@ -212,35 +209,40 @@ chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
   }
 
   if (state.activeJob && state.currentBatchTabs.includes(tabId)) {
-    console.log("[BG] Tab removed from active batch:", tabId);
+    console.log("[BG] Tab removed manually:", tabId);
     state.currentBatchTabs = state.currentBatchTabs.filter(id => id !== tabId);
-    await saveState();
 
-    if (state.currentBatchTabs.length === 0 && !state.batchOpening) {
-      chrome.alarms.clear("batchTimeout");
-      await handleBatchCompletion();
+    // If tab was closed manually but we still need to create more listings, open a replacement tab!
+    if (state.assignedCount < state.totalToCreate) {
+      const locations = await getLocationsList();
+      const locationIndex = state.assignedCount % locations.length;
+      const location = locations[locationIndex];
+
+      const listingPayload = {
+        ...state.listingsData,
+        location,
+        listingIndex: state.assignedCount
+      };
+
+      const tab = await chrome.tabs.create({
+        url: "https://www.facebook.com/marketplace/create/item",
+        active: false
+      });
+
+      state.currentBatchTabs.push(tab.id);
+      state.assignedCount++;
+      await saveState();
+
+      const key = `pendingAutofill_${tab.id}`;
+      await chrome.storage.local.set({ [key]: listingPayload });
+    } else {
+      await saveState();
+      if (state.currentBatchTabs.length === 0 || state.createdCount >= state.totalToCreate) {
+        await finishPhase1();
+      }
     }
   }
 });
-
-async function handleBatchCompletion() {
-  state.currentBatchIndex++;
-  const remaining = state.totalToCreate - state.createdCount;
-
-  for (const tabId of state.currentBatchTabs) {
-    try { await chrome.tabs.remove(tabId); } catch (e) {}
-  }
-  state.currentBatchTabs = [];
-  state.completedTabs = 0;
-  await saveState();
-
-  if (remaining > 0) {
-    updateProgress(`Batch done. Opening next...`, (state.createdCount / state.totalToCreate) * 100);
-    await processNextBatch();
-  } else {
-    await finishPhase1();
-  }
-}
 
 async function finishPhase1() {
   updateProgress("✅ All drafts created! Opening selling page to publish...", 100);
