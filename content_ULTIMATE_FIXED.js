@@ -71,23 +71,23 @@ async function selectDropdownOption(dropdownEl, optionText) {
         .toLowerCase();
       const val = optionText.trim().toLowerCase();
 
-      // Exact match
+      // 1. Condition mappings
+      if (val === 'new' && (txt === 'nuevo' || txt === 'new')) return true;
+      if (val === 'used - like new' && (txt === 'como nuevo' || txt === 'usado: como nuevo' || txt === 'like new' || txt.includes('como nuevo'))) return true;
+      if (val === 'used - very good' && (txt === 'muy buen estado' || txt === 'buen estado' || txt === 'usado: muy buen estado' || txt === 'very good' || txt.includes('buen estado'))) return true;
+      if (val === 'used - good' && (txt === 'buen estado' || txt === 'aceptable' || txt === 'usado: buen estado' || txt === 'good' || txt.includes('buen estado'))) return true;
+      if (val === 'used - fair' && (txt === 'aceptable' || txt === 'regular' || txt === 'usado: regular' || txt === 'fair' || txt.includes('aceptable'))) return true;
+
+      // 2. Availability mappings
+      if (val.includes('single') && (txt === 'único' || txt === 'single' || txt.includes('único') || txt.includes('single'))) return true;
+      if (val.includes('stock') && (txt === 'disponible' || txt === 'stock' || txt.includes('disponible') || txt.includes('stock'))) return true;
+
+      // 3. Category mappings (with strict length limit to avoid parent container match)
       if (txt === val) return true;
-
-      // Condition mappings
-      if (val === 'new' && (txt === 'nuevo' || txt.includes('new'))) return true;
-      if (val === 'used - like new' && (txt.includes('como nuevo') || txt.includes('like new'))) return true;
-      if (val === 'used - very good' && (txt.includes('muy buen') || txt.includes('buen estado') || txt.includes('very good'))) return true;
-      if (val === 'used - good' && (txt.includes('buen estado') || txt.includes('aceptable') || txt.includes('good'))) return true;
-      if (val === 'used - fair' && (txt.includes('aceptable') || txt.includes('regular') || txt.includes('fair'))) return true;
-
-      // Availability mappings
-      if (val.includes('single item') && (txt.includes('único') || txt.includes('single'))) return true;
-      if (val.includes('in stock') && (txt.includes('disponible') || txt.includes('stock'))) return true;
-
-      // Category mappings
       const mapped = categoryTranslations[val];
-      if (mapped && mapped.some(m => txt.includes(m) || m.includes(txt))) return true;
+      if (mapped && mapped.some(m => txt === m || txt.includes(m))) {
+        if (txt.length < 50) return true;
+      }
 
       return false;
     });
