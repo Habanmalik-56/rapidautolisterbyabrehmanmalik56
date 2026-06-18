@@ -1,7 +1,4 @@
-// ============================================================
-// RAPID LISTER PRO - background.js
-// All state stored in chrome.storage.local (survives SW restart)
-// ============================================================
+const runtimePendingData = new Map();
 
 let state = {
   activeJob: false,
@@ -40,14 +37,20 @@ async function handleMessageAsync(message, sender, sendResponse) {
     sendResponse({ status: "started" });
 
   } else if (message.action === "DRAFT_SAVED") {
-    await handleDraftSaved(sender.tab.id);
-    sendResponse({ status: "acknowledged" });
+    const res = await handleDraftSaved(sender.tab.id);
+    sendResponse(res || { status: "acknowledged" });
 
   } else if (message.action === "GET_MY_PENDING_DATA") {
-    const key = `pendingAutofill_${sender.tab.id}`;
-    chrome.storage.local.get([key], (result) => {
-      sendResponse({ data: result[key] || null });
-    });
+    const tabId = sender.tab.id;
+    const cached = runtimePendingData.get(tabId);
+    if (cached) {
+      sendResponse({ data: cached });
+    } else {
+      const key = `pendingAutofill_${tabId}`;
+      chrome.storage.local.get([key], (result) => {
+        sendResponse({ data: result[key] || null });
+      });
+    }
 
   } else if (message.action === "GET_STATE") {
     sendResponse(state);
@@ -106,10 +109,19 @@ async function handleMessageAsync(message, sender, sendResponse) {
 // BULK LISTING (Phase 1 — Create Drafts)
 // ============================================================
 async function startBulkListing(data) {
-  state.activeJob = true;
-  state.totalToCreate = parseInt(data.numListings) || 1;
-  state.createdCount = 0;
-  state.assignedCount = 0;
+  state = {
+    activeJob: true,
+    totalToCreate: parseInt(data.numListings) || 1,
+    createdCount: 0,
+    assignedCount: 0,
+    batchSize: 5,
+    currentBatchTabs: [],
+    listingsData: null,
+    completedTabs: 0,
+    totalBatchesNeeded: 0,
+    currentBatchIndex: 0,
+    batchOpening: false
+  };
 
   const { images, ...textData } = data;
   state.listingsData = textData;
@@ -144,6 +156,7 @@ async function startBulkListing(data) {
 
     const key = `pendingAutofill_${tab.id}`;
     await chrome.storage.local.set({ [key]: listingPayload });
+    runtimePendingData.set(tab.id, listingPayload);
     await sleep(2000);
   }
 }
@@ -167,6 +180,7 @@ async function handleDraftSaved(tabId) {
     (state.createdCount / state.totalToCreate) * 100
   );
   await chrome.storage.local.remove(`pendingAutofill_${tabId}`);
+  runtimePendingData.delete(tabId);
 
   // Check if we have more listings to assign
   if (state.assignedCount < state.totalToCreate) {
@@ -185,6 +199,7 @@ async function handleDraftSaved(tabId) {
 
     const key = `pendingAutofill_${tabId}`;
     await chrome.storage.local.set({ [key]: listingPayload });
+    runtimePendingData.set(tabId, listingPayload);
 
     // Tell content script to reuse the tab
     return { nextUrl: "https://www.facebook.com/marketplace/create/item" };
@@ -211,6 +226,7 @@ chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
   if (state.activeJob && state.currentBatchTabs.includes(tabId)) {
     console.log("[BG] Tab removed manually:", tabId);
     state.currentBatchTabs = state.currentBatchTabs.filter(id => id !== tabId);
+    runtimePendingData.delete(tabId);
 
     // If tab was closed manually but we still need to create more listings, open a replacement tab!
     if (state.assignedCount < state.totalToCreate) {
@@ -235,6 +251,7 @@ chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
 
       const key = `pendingAutofill_${tab.id}`;
       await chrome.storage.local.set({ [key]: listingPayload });
+      runtimePendingData.set(tab.id, listingPayload);
     } else {
       await saveState();
       if (state.currentBatchTabs.length === 0 || state.createdCount >= state.totalToCreate) {
