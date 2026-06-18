@@ -301,48 +301,62 @@ async function setLocation(location) {
   await sleep(4000);
 
   let selectedOption = null;
-  for (let attempt = 0; attempt < 15; attempt++) {
-    const options = [...document.querySelectorAll('[role="option"]')].filter(el => el.offsetParent !== null);
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const options = [
+      ...document.querySelectorAll('[role="option"]'),
+      ...document.querySelectorAll('[role="listbox"] li'),
+      ...document.querySelectorAll('[role="listbox"] div')
+    ].filter(el =>
+      el.offsetParent !== null &&
+      (el.innerText || el.textContent || "").trim().length > 0
+    );
+
     if (options.length > 0) {
-      selectedOption = options.find(el =>
-      (el.innerText || "").toLowerCase().includes(location.toLowerCase())
-    ) || options[0];
+      selectedOption = options[0]; // ALWAYS FIRST SUGGESTION
+      console.log("[LOCATION] First suggestion found:", selectedOption.innerText);
       break;
     }
-    const fallbackOptions = [...document.querySelectorAll('[role="listbox"] div, [role="listbox"] li')]
-      .filter(el => el.offsetParent !== null && el.textContent.trim().length > 0);
-    if (fallbackOptions.length > 0) {
-      selectedOption = fallbackOptions[0];
-      break;
-    }
-    await sleep(300);
+
+    await sleep(500);
   }
 
   if (selectedOption) {
-    console.log("[LOCATION] Clicking suggestion:", selectedOption.textContent.trim());
-    selectedOption.scrollIntoView({ behavior: 'instant', block: 'nearest' });
-    await sleep(200);
+    selectedOption.scrollIntoView({ block: "center" });
+    await sleep(500);
 
-    selectedOption.click();
-    selectedOption.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
-    selectedOption.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+    ["mouseover", "mousedown", "mouseup", "click"].forEach(type => {
+      selectedOption.dispatchEvent(
+        new MouseEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          view: window
+        })
+      );
+    });
 
-    const parentOption = selectedOption.closest('[role="option"], li');
-    if (parentOption && parentOption !== selectedOption) {
-      parentOption.click();
-      parentOption.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
-      parentOption.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
-    }
-    await sleep(1500);
+    await sleep(2000);
     console.log("[LOCATION] Done.");
   } else {
     // Keyboard fallback
-    locInput.focus();
-    await sleep(500);
-    locInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, bubbles: true, cancelable: true }));
-    await sleep(1200);
-    locInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true, cancelable: true }));
-    await sleep(500);
+    await sleep(3000);
+    locInput.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "ArrowDown",
+        code: "ArrowDown",
+        keyCode: 40,
+        bubbles: true
+      })
+    );
+    await sleep(1000);
+    locInput.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        code: "Enter",
+        keyCode: 13,
+        bubbles: true
+      })
+    );
+    await sleep(2000);
     console.log("[LOCATION] Used keyboard fallback");
   }
 
@@ -350,8 +364,12 @@ async function setLocation(location) {
 }
 
 // ============================================================
-// PHASE 2: AUTO PUBLISH SYSTEM (Selling Page)
+// PHASE 2: AUTO PUBLISH SYSTEM (Selling Page) — INLINE SCROLL & CLICK
+// NO NEW TABS! Everything happens on the same selling page.
 // ============================================================
+
+let publishAbortController = null;
+
 function injectPublishBox() {
   if (document.getElementById("rapid-lister-publish-box")) return;
 
@@ -432,69 +450,188 @@ function updatePublishUI(ps) {
 }
 
 async function startAutoPublish() {
-  console.log("[PUBLISH] Scanning page for draft listings...");
+  console.log("[PUBLISH] Starting inline scroll & click publish...");
+  publishAbortController = new AbortController();
 
-  // Strategy 1: Find direct /marketplace/edit/ links on page
-  let draftUrls = [...new Set(
-    [...document.querySelectorAll('a[href*="/marketplace/edit"]')]
-      .map(a => a.href)
-      .filter(h => h && h.includes('listing_id'))
-  )];
+  // Step 1: Scroll down to load ALL drafts
+  updatePublishUI({ statusText: "Scrolling to load all drafts...", currentIndex: 0, totalDrafts: 0 });
+  const allDrafts = await loadAllDrafts();
 
-  // Strategy 2: Look for listing_id in any anchor
-  if (draftUrls.length === 0) {
-    draftUrls = [...new Set(
-      [...document.querySelectorAll('a[href*="listing_id"]')]
-        .map(a => a.href)
-    )];
-  }
-
-  // Strategy 3: Find Continue/Resume buttons that are anchors
-  if (draftUrls.length === 0) {
-    const keywords = ['continue', 'resume', 'complete listing'];
-    const links = [...document.querySelectorAll('a')].filter(a => {
-      const txt = a.textContent.trim().toLowerCase();
-      return keywords.some(k => txt.includes(k)) && a.href;
-    });
-    draftUrls = [...new Set(links.map(a => a.href))];
-  }
-
-  if (draftUrls.length === 0) {
-    alert(
-      "❌ No draft listings found on this page!\n\n" +
-      "Please make sure you are on:\nfacebook.com/marketplace/you/selling\n\n" +
-      "And that your draft listings are VISIBLE on screen before clicking START."
-    );
+  if (allDrafts.length === 0) {
+    alert("❌ No draft listings found! Make sure you are on facebook.com/marketplace/you/selling");
     return;
   }
 
-  console.log("[PUBLISH] Found", draftUrls.length, "draft URLs:", draftUrls);
+  console.log("[PUBLISH] Found", allDrafts.length, "drafts");
 
   const ps = {
     active: true,
     running: true,
-    totalDrafts: draftUrls.length,
+    totalDrafts: allDrafts.length,
     currentIndex: 0,
-    statusText: `Found ${draftUrls.length} drafts. Starting...`
+    statusText: `Found ${allDrafts.length} drafts. Starting...`
   };
-
   await chrome.storage.local.set({ autoPublishState: ps });
   updatePublishUI(ps);
 
-  chrome.runtime.sendMessage({ action: "START_BACKGROUND_PUBLISH", urls: draftUrls });
+  // Step 2: Publish each draft inline (same page, no new tabs)
+  for (let i = 0; i < allDrafts.length; i++) {
+    if (publishAbortController.signal.aborted) {
+      console.log("[PUBLISH] Aborted by user.");
+      break;
+    }
+
+    const draft = allDrafts[i];
+    const currentNum = i + 1;
+
+    const statusText = `Publishing draft ${currentNum}/${allDrafts.length}...`;
+    updatePublishUI({ statusText, currentIndex: i, totalDrafts: allDrafts.length });
+    await chrome.storage.local.set({ autoPublishState: { active: true, running: true, totalDrafts: allDrafts.length, currentIndex: i, statusText } });
+
+    try {
+      await publishSingleDraftInline(draft);
+      console.log(`[PUBLISH] Draft ${currentNum} published successfully.`);
+    } catch (err) {
+      console.error(`[PUBLISH] Draft ${currentNum} failed:`, err.message);
+    }
+
+    // Anti-ban cooldown between drafts
+    if (i < allDrafts.length - 1) {
+      const cooldown = 5000; // 5 seconds
+      updatePublishUI({ statusText: `Cooldown ${cooldown/1000}s...`, currentIndex: i + 1, totalDrafts: allDrafts.length });
+      await sleep(cooldown);
+    }
+  }
+
+  // Done
+  const finalStatus = publishAbortController.signal.aborted ? "Stopped by user" : "ALL DRAFTS PUBLISHED! ✅";
+  updatePublishUI({ statusText: finalStatus, currentIndex: allDrafts.length, totalDrafts: allDrafts.length });
+  await chrome.storage.local.set({ autoPublishState: { active: false, running: false, totalDrafts: allDrafts.length, currentIndex: allDrafts.length, statusText: finalStatus } });
+
+  if (!publishAbortController.signal.aborted) {
+    alert("✅ All draft listings have been published successfully!");
+  }
+
+  publishAbortController = null;
 }
 
 function stopAutoPublish() {
-  chrome.runtime.sendMessage({ action: "STOP_BACKGROUND_PUBLISH" });
+  console.log("[PUBLISH] Stop requested.");
+  if (publishAbortController) {
+    publishAbortController.abort();
+  }
+  updatePublishUI({ statusText: "Stopped", currentIndex: 0, totalDrafts: 0 });
+  chrome.storage.local.set({ autoPublishState: { active: false, running: false, statusText: "Stopped" } });
 }
 
 // ============================================================
-// PHASE 2: RUN PUBLISH ON EDIT PAGE
+// SCROLL & LOAD ALL DRAFTS
 // ============================================================
-async function runPublishAction() {
-  console.log("[PUBLISH] runPublishAction() triggered on edit page");
+async function loadAllDrafts() {
+  const drafts = [];
+  const seenUrls = new Set();
+  let lastHeight = 0;
+  let noChangeCount = 0;
+  const maxScrollAttempts = 50;
 
-  // Helper: find a visible button/element by exact or partial text
+  for (let scrollAttempt = 0; scrollAttempt < maxScrollAttempts; scrollAttempt++) {
+    if (publishAbortController && publishAbortController.signal.aborted) break;
+
+    // Find all draft links currently visible
+    const links = [...document.querySelectorAll('a[href*="/marketplace/edit"]')]
+      .filter(a => a.href && a.href.includes('listing_id'));
+
+    for (const link of links) {
+      if (!seenUrls.has(link.href)) {
+        seenUrls.add(link.href);
+        // Find the clickable card/parent element
+        const card = link.closest('[role="article"]') || 
+                     link.closest('div[class*="x1"]') || 
+                     link.closest('div') || 
+                     link;
+        drafts.push({
+          url: link.href,
+          element: card,
+          linkElement: link
+        });
+      }
+    }
+
+    // Scroll down to load more
+    window.scrollTo(0, document.body.scrollHeight);
+    await sleep(2000);
+
+    const newHeight = document.body.scrollHeight;
+    if (newHeight === lastHeight) {
+      noChangeCount++;
+      if (noChangeCount >= 3) break; // No more content loading
+    } else {
+      noChangeCount = 0;
+    }
+    lastHeight = newHeight;
+  }
+
+  // Scroll back to top
+  window.scrollTo(0, 0);
+  await sleep(1000);
+
+  console.log("[PUBLISH] Total drafts loaded:", drafts.length);
+  return drafts;
+}
+
+// ============================================================
+// PUBLISH SINGLE DRAFT INLINE (same page, no tab switching)
+// ============================================================
+async function publishSingleDraftInline(draft) {
+  console.log("[PUBLISH] Opening draft:", draft.url);
+
+  // Click the draft card to open it (inline or modal)
+  draft.element.scrollIntoView({ block: "center" });
+  await sleep(1000);
+
+  // Try multiple click strategies
+  const clickTargets = [
+    draft.linkElement,
+    draft.element,
+    draft.element.querySelector('div[role="button"]'),
+    draft.element.querySelector('a'),
+    draft.element.querySelector('span')
+  ].filter(Boolean);
+
+  let clicked = false;
+  for (const target of clickTargets) {
+    try {
+      target.scrollIntoView({ block: "center" });
+      await sleep(500);
+
+      // Full mouse event sequence
+      ["mouseover", "mousedown", "mouseup", "click"].forEach(type => {
+        target.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+      });
+
+      // Also try native click
+      target.click();
+      clicked = true;
+      console.log("[PUBLISH] Clicked draft element");
+      break;
+    } catch (e) {}
+  }
+
+  if (!clicked) {
+    throw new Error("Could not click draft element");
+  }
+
+  // Wait for the edit page/modal to load
+  await sleep(5000);
+
+  // Now we are on the edit page (either in same tab or modal)
+  // Try to find and click "Next" then "Publish"
+  await runPublishActionInline();
+}
+
+async function runPublishActionInline() {
+  console.log("[PUBLISH] Running inline publish action...");
+
   const findBtn = (texts) => {
     return [...document.querySelectorAll('div[role="button"], button, span[role="button"]')]
       .find(el => {
@@ -504,60 +641,67 @@ async function runPublishAction() {
       });
   };
 
-  try {
-    await sleep(3000); // wait for page to fully load
-
-    // Step 1: Click "Next" if present (some draft edit flows have a Next button)
-    let nextBtn = null;
-    for (let i = 0; i < 10; i++) {
-      nextBtn = findBtn(['next', 'siguiente', 'next step']);
-      if (nextBtn) break;
-      await sleep(500);
-    }
-
-    if (nextBtn) {
-      console.log("[PUBLISH] Clicking Next button...");
-      nextBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
-      await sleep(500);
-      nextBtn.click();
-      nextBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
-      nextBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
-      await sleep(4000); // wait for transition to publish step
-    } else {
-      console.log("[PUBLISH] No Next button found, looking directly for Publish...");
-    }
-
-    // Step 2: Click "Publish"
-    let publishBtn = null;
-    for (let i = 0; i < 20; i++) {
-      publishBtn = findBtn(['publish', 'publicar', 'post', 'publicar ahora']);
-      if (publishBtn) break;
-      await sleep(500);
-    }
-
-    if (!publishBtn) {
-      throw new Error("Publish button not found after waiting 10 seconds");
-    }
-
-    console.log("[PUBLISH] Clicking Publish button...");
-    publishBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
-    await sleep(500);
-    publishBtn.click();
-    publishBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
-    publishBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
-
-    // Wait for publish to complete
-    await sleep(8000);
-
-    console.log("[PUBLISH] Done! Signaling background...");
-    chrome.runtime.sendMessage({ action: "PUBLISH_COMPLETE", success: true });
-
-  } catch (err) {
-    console.error("[PUBLISH] Failed:", err.message);
-    chrome.runtime.sendMessage({ action: "PUBLISH_COMPLETE", success: false });
+  // Step 1: Click "Next" if present
+  let nextBtn = null;
+  for (let i = 0; i < 15; i++) {
+    if (publishAbortController && publishAbortController.signal.aborted) return;
+    nextBtn = findBtn(['next', 'siguiente', 'next step']);
+    if (nextBtn) break;
+    await sleep(800);
   }
-}
 
+  if (nextBtn) {
+    console.log("[PUBLISH] Clicking Next...");
+    nextBtn.scrollIntoView({ block: "center" });
+    await sleep(500);
+    ["mouseover", "mousedown", "mouseup", "click"].forEach(type => {
+      nextBtn.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+    });
+    nextBtn.click();
+    await sleep(5000);
+  }
+
+  // Step 2: Click "Publish"
+  let publishBtn = null;
+  for (let i = 0; i < 25; i++) {
+    if (publishAbortController && publishAbortController.signal.aborted) return;
+    publishBtn = findBtn(['publish', 'publicar', 'post', 'publicar ahora']);
+    if (publishBtn) break;
+    await sleep(800);
+  }
+
+  if (!publishBtn) {
+    throw new Error("Publish button not found");
+  }
+
+  console.log("[PUBLISH] Clicking Publish...");
+  publishBtn.scrollIntoView({ block: "center" });
+  await sleep(500);
+  ["mouseover", "mousedown", "mouseup", "click"].forEach(type => {
+    publishBtn.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+  });
+  publishBtn.click();
+
+  // Wait for publish to process
+  await sleep(10000);
+
+  // Step 3: Try to close any modal/go back to selling page
+  const closeBtn = findBtn(['close', 'done', 'ok']) || 
+                   document.querySelector('[aria-label="Close"]') ||
+                   document.querySelector('[aria-label="Cerrar"]');
+  if (closeBtn) {
+    closeBtn.click();
+    await sleep(2000);
+  }
+
+  // Navigate back to selling page if URL changed
+  if (!window.location.href.includes('/marketplace/you/selling')) {
+    history.back();
+    await sleep(3000);
+  }
+
+  console.log("[PUBLISH] Inline publish complete.");
+}
 // ============================================================
 // MAIN INIT — runs on page load
 // ============================================================
@@ -579,26 +723,9 @@ async function init() {
   } else if (url.includes("/marketplace/you/selling")) {
     // Phase 2: inject publish panel on selling page
     injectPublishBox();
-
-  } else if (url.includes("/marketplace/edit")) {
-    // Phase 2: this tab was opened for publishing - check via background
-    console.log("[INIT] Edit page - checking if this is a publish tab...");
-    chrome.runtime.sendMessage({ action: "CHECK_AUTO_PUBLISH" }, (res) => {
-      console.log("[INIT] CHECK_AUTO_PUBLISH response:", res);
-      if (res && res.isPublishTab) {
-        runPublishAction();
-      } else {
-        console.log("[INIT] Not a publish tab, doing nothing.");
-      }
-    });
   }
+  // NOTE: /marketplace/edit is now handled INLINE via publishSingleDraftInline()
+  // No more tab switching! Everything stays on the selling page.
 }
-
-// Listen for finish notification
-chrome.runtime.onMessage.addListener((msg) => {
-  if (msg.action === "BACKGROUND_PUBLISH_FINISHED") {
-    alert("✅ All draft listings have been published successfully!");
-  }
-});
 
 init();

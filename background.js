@@ -248,152 +248,26 @@ function sleep(ms) {
 }
 
 // ============================================================
-// BACKGROUND PUBLISH SYSTEM (Phase 2)
-// ALL state stored in chrome.storage.local["publishQueue"]
-// This SURVIVES Chrome service worker restarts!
+// BACKGROUND PUBLISH SYSTEM (Phase 2) — DEPRECATED
+// Publish is now handled INLINE in content_ULTIMATE_FIXED.js
+// via scroll + click on the same selling page. No tabs needed!
 // ============================================================
 
-async function startBackgroundPublish(urls) {
-  console.log("[BG] startBackgroundPublish with", urls.length, "URLs");
+// Keep minimal handlers for backward compatibility
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // ... existing handlers above already cover this ...
 
-  const queue = {
-    running: true,
-    urls: urls,
-    currentIndex: 0,
-    totalDrafts: urls.length,
-    activeTabId: null,
-    doneCount: 0
-  };
-
-  await chrome.storage.local.set({
-    publishQueue: queue,
-    autoPublishState: {
-      active: true,
-      running: true,
-      totalDrafts: urls.length,
-      currentIndex: 0,
-      statusText: `Found ${urls.length} drafts. Starting...`
-    }
-  });
-
-  await launchNextPublishTab();
-}
-
-async function launchNextPublishTab() {
-  const result = await chrome.storage.local.get("publishQueue");
-  const queue = result.publishQueue;
-
-  if (!queue || !queue.running) {
-    console.log("[BG] launchNextPublishTab: queue not running, stopping.");
-    return;
+  if (message.action === "START_BACKGROUND_PUBLISH") {
+    console.log("[BG] START_BACKGROUND_PUBLISH received but publish is now inline. Ignoring.");
+    sendResponse({ status: "inline_mode" });
+  } else if (message.action === "STOP_BACKGROUND_PUBLISH") {
+    console.log("[BG] STOP_BACKGROUND_PUBLISH received.");
+    sendResponse({ status: "stopped" });
+  } else if (message.action === "CHECK_AUTO_PUBLISH") {
+    sendResponse({ isPublishTab: false });
+  } else if (message.action === "PUBLISH_COMPLETE") {
+    console.log("[BG] PUBLISH_COMPLETE received:", message.success);
+    sendResponse({ status: "acknowledged" });
   }
-
-  if (queue.currentIndex >= queue.totalDrafts) {
-    await finishBackgroundPublish();
-    return;
-  }
-
-  const url = queue.urls[queue.currentIndex];
-  const nextIndex = queue.currentIndex + 1;
-
-  console.log("[BG] Opening draft", nextIndex, "/", queue.totalDrafts, "->", url);
-
-  const tab = await chrome.tabs.create({ url: url, active: true });
-
-  queue.currentIndex = nextIndex;
-  queue.activeTabId = tab.id;
-
-  await chrome.storage.local.set({
-    publishQueue: queue,
-    autoPublishState: {
-      active: true,
-      running: true,
-      totalDrafts: queue.totalDrafts,
-      currentIndex: queue.doneCount,
-      statusText: `Publishing draft ${nextIndex} / ${queue.totalDrafts}...`
-    }
-  });
-
-  console.log("[BG] Tab", tab.id, "opened for draft", nextIndex);
-}
-
-async function handlePublishComplete(tabId, success) {
-  console.log("[BG] handlePublishComplete tab:", tabId, "success:", success);
-
-  const result = await chrome.storage.local.get("publishQueue");
-  const queue = result.publishQueue;
-
-  if (!queue) { console.log("[BG] No queue found."); return; }
-  if (queue.activeTabId !== tabId) {
-    console.log("[BG] Tab ID mismatch. Expected:", queue.activeTabId, "Got:", tabId);
-    return;
-  }
-
-  // Close the finished tab
-  try { await chrome.tabs.remove(tabId); } catch (e) {}
-
-  queue.activeTabId = null;
-  queue.doneCount = (queue.doneCount || 0) + 1;
-
-  const statusText = success
-    ? `Published ${queue.doneCount}/${queue.totalDrafts} ✅`
-    : `Draft ${queue.doneCount} had an error, continuing...`;
-
-  await chrome.storage.local.set({
-    publishQueue: queue,
-    autoPublishState: {
-      active: true,
-      running: true,
-      totalDrafts: queue.totalDrafts,
-      currentIndex: queue.doneCount,
-      statusText: statusText
-    }
-  });
-
-  if (queue.currentIndex >= queue.totalDrafts) {
-    await finishBackgroundPublish();
-  } else {
-    await sleep(3000); // 3 second anti-ban cooldown
-    await launchNextPublishTab();
-  }
-}
-
-async function stopBackgroundPublish() {
-  console.log("[BG] Stopping background publish...");
-
-  const result = await chrome.storage.local.get("publishQueue");
-  const queue = result.publishQueue;
-
-  if (queue && queue.activeTabId) {
-    try { await chrome.tabs.remove(queue.activeTabId); } catch (e) {}
-  }
-
-  await chrome.storage.local.set({
-    publishQueue: { running: false, activeTabId: null },
-    autoPublishState: {
-      active: false,
-      running: false,
-      statusText: "Stopped"
-    }
-  });
-}
-
-async function finishBackgroundPublish() {
-  console.log("[BG] All drafts published!");
-
-  const result = await chrome.storage.local.get("publishQueue");
-  const queue = result.publishQueue || {};
-
-  await chrome.storage.local.set({
-    publishQueue: { running: false, activeTabId: null },
-    autoPublishState: {
-      active: true,
-      running: false,
-      totalDrafts: queue.totalDrafts || 0,
-      currentIndex: queue.totalDrafts || 0,
-      statusText: "ALL DRAFTS PUBLISHED! ✅"
-    }
-  });
-
-  chrome.runtime.sendMessage({ action: "BACKGROUND_PUBLISH_FINISHED" }).catch(() => {});
-}
+  return true;
+});
