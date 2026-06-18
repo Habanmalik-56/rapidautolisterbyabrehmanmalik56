@@ -40,131 +40,166 @@ async function selectDropdownOption(dropdownEl, optionText) {
   if (!dropdownEl || !optionText) return false;
 
   const val = optionText.trim().toLowerCase();
-  console.log("[SELECT] Selecting:", optionText);
+  console.log("[SELECT] Selecting:", optionText, "| val:", val);
 
-  function matchesOption(el) {
-    const txt = (el.innerText || el.textContent || "").trim().toLowerCase();
-    if (!txt || txt.length > 100) return false;
-
-    // Exact match
-    if (txt === val) return true;
-
-    // Condition mappings
-    if (val === 'new' && (txt === 'nuevo' || txt === 'new')) return true;
-    if (val === 'used - like new' && (txt.includes('como nuevo') || txt.includes('like new'))) return true;
-    if (val === 'used - very good' && (txt.includes('muy buen') || txt.includes('very good'))) return true;
-    if (val === 'used - good' && (txt === 'good' || txt === 'buen estado' || txt === 'aceptable')) return true;
-    if (val === 'used - fair' && (txt === 'fair' || txt === 'regular' || txt === 'aceptable')) return true;
-
-    // Availability mappings
-    if (val.includes('single') && (txt.includes('único') || txt === 'single')) return true;
-    if (val.includes('stock') && (txt.includes('disponible') || txt.includes('stock'))) return true;
-
-    // Category: check English exact match
-    if (txt === val) return true;
-
-    // Category: check translation map
-    const mapped = categoryTranslations[val];
-    if (mapped) {
-      for (const m of mapped) {
-        if (txt === m) return true;
-        if (txt.includes(m) && txt.length < 60) return true;
-      }
-    }
-
-    // Partial match for longer category names
-    if (txt.includes(val) && txt.length < 60) return true;
-    if (val.includes(txt) && txt.length > 3) return true;
-
-    return false;
-  }
+  // Facebook category structure: nested menus with sections
+  // We need to find the option text anywhere in the dropdown and click it
 
   for (let retry = 0; retry < 3; retry++) {
-    // Step 1: Click to open dropdown
+    // Step 1: Open dropdown with multiple interaction methods
     dropdownEl.scrollIntoView({ block: "center" });
-    await sleep(500);
+    await sleep(600);
 
-    // Full interaction sequence to open dropdown
-    dropdownEl.focus();
-    await sleep(200);
-    ["mousedown", "mouseup", "click"].forEach(type =>
-      dropdownEl.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }))
-    );
-    dropdownEl.click();
-    await sleep(3000); // Wait longer for React to render dropdown
+    // Try clicking the dropdown button itself
+    const clickTargets = [
+      dropdownEl,
+      dropdownEl.querySelector('[role="button"]'),
+      dropdownEl.querySelector('div[tabindex]'),
+      dropdownEl.closest('[role="button"]'),
+      dropdownEl.closest('div[tabindex]')
+    ].filter(Boolean);
 
-    // Step 2: Find matching option — comprehensive search
-    let allOptions = [
-      ...document.querySelectorAll('[role="option"]'),
-      ...document.querySelectorAll('[role="menuitem"]'),
-      ...document.querySelectorAll('[data-value]'),
-      ...document.querySelectorAll('ul li'),
-      ...document.querySelectorAll('[class*="x1"] [role="none"]'),
-      ...document.querySelectorAll('div[tabindex]'),
-    ].filter(el => el.offsetParent !== null);
-
-    let target = allOptions.find(matchesOption);
-
-    // Step 3: Deep fallback — search ALL visible elements with text
-    if (!target) {
-      console.log("[SELECT] Fallback: searching all visible elements...");
-      const all = [...document.querySelectorAll('span, div, li, a, button')]
-        .filter(el => {
-          if (el.offsetParent === null) return false;
-          const t = (el.innerText || el.textContent || "").trim();
-          return t.length > 0 && t.length < 100;
+    for (const target of clickTargets) {
+      try {
+        target.focus();
+        await sleep(100);
+        ["mousedown", "mouseup", "click"].forEach(type => {
+          target.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
         });
-      target = all.find(matchesOption);
+        target.click();
+        console.log("[SELECT] Clicked dropdown opener:", target.tagName);
+      } catch(e) {}
+    }
+
+    await sleep(3000); // Wait for Facebook React to render dropdown
+
+    // Step 2: Find ALL visible text elements in the dropdown
+    // Facebook uses nested divs/spans, not role="option"
+    const allVisibleElements = [...document.querySelectorAll('*')].filter(el => {
+      if (el.offsetParent === null) return false;
+      const rect = el.getBoundingClientRect();
+      // Must be visible and reasonably sized
+      if (rect.width < 20 || rect.height < 10) return false;
+      if (rect.top < 0 || rect.top > window.innerHeight) return false;
+      const txt = (el.innerText || el.textContent || "").trim().toLowerCase();
+      return txt.length > 0 && txt.length < 100;
+    });
+
+    console.log("[SELECT] Scanning", allVisibleElements.length, "visible elements for:", val);
+
+    // Step 3: Find matching element
+    let target = null;
+
+    // First: exact match on short text elements (most likely to be the option)
+    for (const el of allVisibleElements) {
+      const txt = (el.innerText || el.textContent || "").trim().toLowerCase();
+
+      // Exact match
+      if (txt === val) {
+        target = el;
+        console.log("[SELECT] Exact match:", txt);
+        break;
+      }
+
+      // Check category translations
+      const mapped = categoryTranslations[val];
+      if (mapped) {
+        for (const m of mapped) {
+          if (txt === m || txt.includes(m)) {
+            target = el;
+            console.log("[SELECT] Translation match:", txt, "=>", m);
+            break;
+          }
+        }
+        if (target) break;
+      }
+
+      // Condition mappings
+      if (val === 'new' && (txt === 'nuevo' || txt === 'new')) { target = el; break; }
+      if (val === 'used - like new' && (txt.includes('como nuevo') || txt.includes('like new'))) { target = el; break; }
+      if (val === 'used - very good' && (txt.includes('muy buen') || txt.includes('very good'))) { target = el; break; }
+      if (val === 'used - good' && (txt === 'good' || txt === 'buen estado' || txt === 'aceptable')) { target = el; break; }
+      if (val === 'used - fair' && (txt === 'fair' || txt === 'regular')) { target = el; break; }
+
+      // Availability
+      if (val.includes('single') && (txt.includes('único') || txt === 'single')) { target = el; break; }
+      if (val.includes('stock') && (txt.includes('disponible') || txt.includes('stock'))) { target = el; break; }
     }
 
     if (target) {
-      console.log("[SELECT] Found:", `"${target.innerText.trim()}"`, target.tagName);
+      console.log("[SELECT] Target found:", target.innerText.trim(), "| tag:", target.tagName);
+
+      // Scroll to make sure it's visible
       target.scrollIntoView({ block: "center" });
       await sleep(800);
 
-      // Method 1: Full mouse event sequence on the element
-      for (const el of [target, target.closest('[role="option"]'), target.closest('li'), target.closest('[tabindex]')]) {
-        if (!el) continue;
-        ["mouseover", "mouseenter", "mousedown", "mouseup", "click"].forEach(type => {
-          el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
-        });
-        try { el.click(); } catch(e) {}
+      // Find the most clickable ancestor (Facebook wraps text in multiple divs)
+      let clickable = target;
+      let parent = target.parentElement;
+      for (let i = 0; i < 5 && parent; i++) {
+        if (parent.getAttribute('role') === 'button' || 
+            parent.getAttribute('tabindex') ||
+            parent.tagName === 'BUTTON' ||
+            parent.tagName === 'A' ||
+            parent.onclick ||
+            parent.style.cursor === 'pointer') {
+          clickable = parent;
+          console.log("[SELECT] Found clickable ancestor:", parent.tagName);
+          break;
+        }
+        parent = parent.parentElement;
       }
+
+      // Full interaction sequence
+      clickable.scrollIntoView({ block: "center" });
+      await sleep(500);
+      clickable.focus();
+      await sleep(200);
+
+      // Mouse events
+      ["mouseover", "mouseenter", "mousedown", "mouseup", "click"].forEach(type => {
+        clickable.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+      });
+
+      // Native click
+      try { clickable.click(); } catch(e) {}
+
+      // Keyboard events as backup
+      await sleep(300);
+      clickable.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true, cancelable: true }));
+      await sleep(100);
+      clickable.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true, cancelable: true }));
 
       await sleep(3000);
 
-      // Check if dropdown closed (option selected)
-      const dropdownStillOpen = document.querySelector('[role="listbox"]') || 
-                                 document.querySelector('[role="menu"]') ||
-                                 document.querySelector('ul[role="listbox"]');
-      if (!dropdownStillOpen) {
-        console.log("[SELECT] Dropdown closed — option selected successfully");
+      // Check if dropdown closed by looking for the dropdown container
+      const dropdownOpen = document.querySelector('[role="listbox"]') || 
+                           document.querySelector('[role="menu"]') ||
+                           document.querySelector('div[style*="position: absolute"]') ||
+                           document.querySelector('div[style*="position: fixed"]');
+
+      if (!dropdownOpen || dropdownOpen.offsetParent === null) {
+        console.log("[SELECT] SUCCESS - Dropdown closed");
         return true;
       }
 
-      // If dropdown still open, try keyboard fallback
-      console.log("[SELECT] Dropdown still open, trying keyboard...");
-      target.focus();
-      await sleep(300);
-      target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true, cancelable: true }));
-      await sleep(300);
-      target.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true, cancelable: true }));
-      await sleep(3000);
+      console.log("[SELECT] Dropdown still open, may need another click");
+      // Try clicking again on the target directly
+      try { target.click(); } catch(e) {}
+      await sleep(2000);
       return true;
     }
 
     console.warn("[SELECT] No match found, retry", retry + 1, "of 3");
 
-    // Close dropdown if open (press Escape)
-    dropdownEl.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
-    await sleep(1500);
+    // Close any open dropdown with Escape
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+    await sleep(2000);
   }
 
-  console.error("[SELECT] FAILED to find option:", optionText);
+  console.error("[SELECT] FAILED after 3 retries:", optionText);
   return false;
-}
-
-function waitForElement(selectorFn, timeoutMs = 15000) {
+}function waitForElement(selectorFn, timeoutMs = 15000) {
   return new Promise((resolve, reject) => {
     const el = selectorFn();
     if (el) return resolve(el);
@@ -327,12 +362,23 @@ async function runPhase1(data) {
 
     // 4. CATEGORY
     console.log("Step 4: Selecting Category");
-    // Find the Category dropdown by looking for any interactive element whose visible text is "Category"
     const categoryDrop = await findDropdownByPlaceholderText(
       ["category", "categoría", "categoria"]
     );
     if (categoryDrop && data.category) {
-      await selectDropdownOption(categoryDrop, data.category);
+      const catSuccess = await selectDropdownOption(categoryDrop, data.category);
+      if (!catSuccess) {
+        console.warn("[CATEGORY] Primary select failed, trying fallback...");
+        // Fallback: try clicking the dropdown again and using keyboard
+        categoryDrop.click();
+        await sleep(2000);
+        // Type first letter to jump to category
+        const firstLetter = data.category.charAt(0).toLowerCase();
+        categoryDrop.dispatchEvent(new KeyboardEvent('keydown', { key: firstLetter, code: 'Key' + firstLetter.toUpperCase(), keyCode: firstLetter.charCodeAt(0), bubbles: true }));
+        await sleep(1000);
+        categoryDrop.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+        await sleep(3000);
+      }
       await sleep(4000);
     } else {
       console.warn("[CATEGORY] Dropdown not found — skipping");
@@ -405,7 +451,12 @@ async function runPhase1(data) {
     if (data.location) {
       console.log("Step 10: Setting location...");
       await sleep(500);
-      await setLocation(data.location);
+      const locSuccess = await setLocation(data.location);
+      if (!locSuccess) {
+        console.warn("[LOCATION] setLocation returned false, retrying once...");
+        await sleep(2000);
+        await setLocation(data.location);
+      }
       await sleep(1000);
     }
 
@@ -461,46 +512,27 @@ async function setLocation(location) {
     return false;
   }
 
-  // Step 1: Focus and clear input properly
-  locInput.scrollIntoView({ block: "center" });
-  await sleep(500);
   locInput.click();
-  await sleep(300);
+  await sleep(500);
   locInput.focus();
   await sleep(300);
 
-  // Step 2: Clear using native setter
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
   setter.call(locInput, '');
   locInput.dispatchEvent(new Event('input', { bubbles: true }));
-  await sleep(500);
+  await sleep(300);
 
-  // Step 3: Type character by character with proper events
-  const text = String(location);
-  for (const char of text) {
-    setter.call(locInput, locInput.value + char);
-    locInput.dispatchEvent(new InputEvent('input', { bubbles: true, data: char, inputType: 'insertText' }));
-    await sleep(50); // Small delay between characters
-  }
-
-  // Step 4: Trigger change and key events to activate dropdown
-  locInput.dispatchEvent(new Event('change', { bubbles: true }));
-  locInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', code: 'End', keyCode: 35, bubbles: true }));
-  await sleep(100);
-  locInput.dispatchEvent(new KeyboardEvent('keyup', { key: 'End', code: 'End', keyCode: 35, bubbles: true }));
-
+  typeIntoField(locInput, location);
   console.log("[LOCATION] Typed:", location);
-  await sleep(4000); // Wait for suggestions to appear
 
-  // Step 5: Try to select first suggestion via mouse click
+  await sleep(4000);
+
   let selectedOption = null;
   for (let attempt = 0; attempt < 20; attempt++) {
     const options = [
       ...document.querySelectorAll('[role="option"]'),
       ...document.querySelectorAll('[role="listbox"] li'),
-      ...document.querySelectorAll('[role="listbox"] div'),
-      ...document.querySelectorAll('ul li'),
-      ...document.querySelectorAll('[class*="x1"] div'),
+      ...document.querySelectorAll('[role="listbox"] div')
     ].filter(el =>
       el.offsetParent !== null &&
       (el.innerText || el.textContent || "").trim().length > 0
@@ -508,7 +540,7 @@ async function setLocation(location) {
 
     if (options.length > 0) {
       selectedOption = options[0]; // ALWAYS FIRST SUGGESTION
-      console.log("[LOCATION] First suggestion found:", selectedOption.innerText || selectedOption.textContent);
+      console.log("[LOCATION] First suggestion found:", selectedOption.innerText);
       break;
     }
 
@@ -517,10 +549,9 @@ async function setLocation(location) {
 
   if (selectedOption) {
     selectedOption.scrollIntoView({ block: "center" });
-    await sleep(800);
+    await sleep(500);
 
-    // Full mouse interaction sequence
-    ["mouseover", "mouseenter", "mousedown", "mouseup", "click"].forEach(type => {
+    ["mouseover", "mousedown", "mouseup", "click"].forEach(type => {
       selectedOption.dispatchEvent(
         new MouseEvent(type, {
           bubbles: true,
@@ -529,60 +560,31 @@ async function setLocation(location) {
         })
       );
     });
-    try { selectedOption.click(); } catch(e) {}
 
-    await sleep(3000);
-    console.log("[LOCATION] Done via mouse click.");
+    await sleep(2000);
+    console.log("[LOCATION] Done.");
   } else {
-    // Step 6: Keyboard fallback - MOST RELIABLE for Facebook
-    console.log("[LOCATION] No suggestion found via mouse, using keyboard fallback...");
-    locInput.focus();
-    await sleep(1000);
-
-    // Press ArrowDown to open/select first suggestion
-    locInput.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "ArrowDown",
-        code: "ArrowDown",
-        keyCode: 40,
-        bubbles: true,
-        cancelable: true
-      })
-    );
-    await sleep(100);
-    locInput.dispatchEvent(
-      new KeyboardEvent("keyup", {
-        key: "ArrowDown",
-        code: "ArrowDown",
-        keyCode: 40,
-        bubbles: true,
-        cancelable: true
-      })
-    );
-    await sleep(1500);
-
-    // Press Enter to select
-    locInput.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "Enter",
-        code: "Enter",
-        keyCode: 13,
-        bubbles: true,
-        cancelable: true
-      })
-    );
-    await sleep(100);
-    locInput.dispatchEvent(
-      new KeyboardEvent("keyup", {
-        key: "Enter",
-        code: "Enter",
-        keyCode: 13,
-        bubbles: true,
-        cancelable: true
-      })
-    );
+    // Keyboard fallback
     await sleep(3000);
-    console.log("[LOCATION] Done via keyboard fallback.");
+    locInput.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "ArrowDown",
+        code: "ArrowDown",
+        keyCode: 40,
+        bubbles: true
+      })
+    );
+    await sleep(1000);
+    locInput.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        code: "Enter",
+        keyCode: 13,
+        bubbles: true
+      })
+    );
+    await sleep(2000);
+    console.log("[LOCATION] Used keyboard fallback");
   }
 
   return true;
