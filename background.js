@@ -10,7 +10,9 @@ let state = {
   completedTabs: 0,
   totalBatchesNeeded: 0,
   currentBatchIndex: 0,
-  batchOpening: false
+  batchOpening: false,
+  activeFillingTabId: null,
+  currentBatchCompletedTabs: []
 };
 
 async function saveState() {
@@ -42,6 +44,11 @@ async function handleMessageAsync(message, sender, sendResponse) {
 
   } else if (message.action === "GET_MY_PENDING_DATA") {
     const tabId = sender.tab.id;
+    if (tabId !== state.activeFillingTabId) {
+      console.log(`[BG] GET_MY_PENDING_DATA from tab ${tabId} denied (not active filling tab: ${state.activeFillingTabId})`);
+      sendResponse({ data: null, status: "waiting_for_activation" });
+      return true;
+    }
     const cached = runtimePendingData.get(tabId);
     if (cached) {
       sendResponse({ data: cached });
@@ -120,12 +127,15 @@ async function startBulkListing(data) {
     completedTabs: 0,
     totalBatchesNeeded: 0,
     currentBatchIndex: 0,
-    batchOpening: false
+    batchOpening: false,
+    activeFillingTabId: null,
+    currentBatchCompletedTabs: []
   };
 
   const { images, ...textData } = data;
   state.listingsData = textData;
   state.currentBatchTabs = [];
+  state.currentBatchCompletedTabs = [];
 
   await saveState();
   updateProgress("Starting bulk listing process...", 0);
@@ -145,10 +155,15 @@ async function startBulkListing(data) {
       listingIndex: state.assignedCount
     };
 
+    const isActive = (i === 0);
     const tab = await chrome.tabs.create({
       url: "https://www.facebook.com/marketplace/create/item",
-      active: false
+      active: isActive
     });
+
+    if (isActive) {
+      state.activeFillingTabId = tab.id;
+    }
 
     state.currentBatchTabs.push(tab.id);
     state.assignedCount++;
@@ -157,7 +172,7 @@ async function startBulkListing(data) {
     const key = `pendingAutofill_${tab.id}`;
     await chrome.storage.local.set({ [key]: listingPayload });
     runtimePendingData.set(tab.id, listingPayload);
-    await sleep(2000);
+    await sleep(1500);
   }
 }
 
@@ -173,6 +188,14 @@ async function handleDraftSaved(tabId) {
   if (!state.activeJob) return { close: true };
 
   state.createdCount++;
+  
+  if (!state.currentBatchCompletedTabs) {
+    state.currentBatchCompletedTabs = [];
+  }
+  if (!state.currentBatchCompletedTabs.includes(tabId)) {
+    state.currentBatchCompletedTabs.push(tabId);
+  }
+  
   await saveState();
 
   updateProgress(
@@ -182,38 +205,96 @@ async function handleDraftSaved(tabId) {
   await chrome.storage.local.remove(`pendingAutofill_${tabId}`);
   runtimePendingData.delete(tabId);
 
-  // Check if we have more listings to assign
-  if (state.assignedCount < state.totalToCreate) {
-    const locations = await getLocationsList();
-    const locationIndex = state.assignedCount % locations.length;
-    const location = locations[locationIndex];
-
-    const listingPayload = {
-      ...state.listingsData,
-      location,
-      listingIndex: state.assignedCount
-    };
-
-    state.assignedCount++;
+  // Check if we need to switch to the next tab in the current batch
+  const currentIndex = state.currentBatchTabs.indexOf(tabId);
+  if (currentIndex !== -1 && currentIndex + 1 < state.currentBatchTabs.length) {
+    // Switch to the next tab in the batch
+    const nextTabId = state.currentBatchTabs[currentIndex + 1];
+    state.activeFillingTabId = nextTabId;
     await saveState();
 
-    const key = `pendingAutofill_${tabId}`;
-    await chrome.storage.local.set({ [key]: listingPayload });
-    runtimePendingData.set(tabId, listingPayload);
-
-    // Tell content script to reuse the tab
-    return { nextUrl: "https://www.facebook.com/marketplace/create/item" };
-  } else {
-    // No more listings to assign. Close this tab.
-    state.currentBatchTabs = state.currentBatchTabs.filter(id => id !== tabId);
-    await saveState();
-
-    try { await chrome.tabs.remove(tabId); } catch (e) {}
-
-    if (state.currentBatchTabs.length === 0 || state.createdCount >= state.totalToCreate) {
-      await finishPhase1();
+    try {
+      await chrome.tabs.update(nextTabId, { active: true });
+    } catch (e) {
+      console.error("[BG] Failed to activate next tab:", nextTabId, e);
     }
-    return { close: true };
+
+    // Send START_FILLING to the next tab
+    const nextKey = `pendingAutofill_${nextTabId}`;
+    chrome.storage.local.get([nextKey], (result) => {
+      const payload = result[nextKey];
+      if (payload) {
+        chrome.tabs.sendMessage(nextTabId, { action: "START_FILLING", data: payload }, () => {
+          if (chrome.runtime.lastError) {
+            console.log("[BG] Next tab not ready for message yet, it will load soon.");
+          }
+        });
+      }
+    });
+
+    return { stay: true };
+
+  } else {
+    // All tabs in this batch have finished
+    // Check if we still have more listings to create
+    if (state.assignedCount < state.totalToCreate) {
+      const locations = await getLocationsList();
+      const remaining = state.totalToCreate - state.assignedCount;
+      const nextBatchSize = Math.min(state.batchSize, remaining);
+
+      // Reuse the first nextBatchSize tabs, close the rest
+      const tabsToReuse = state.currentBatchTabs.slice(0, nextBatchSize);
+      const tabsToClose = state.currentBatchTabs.slice(nextBatchSize);
+
+      for (const tId of tabsToClose) {
+        try { await chrome.tabs.remove(tId); } catch (e) {}
+      }
+
+      state.currentBatchTabs = tabsToReuse;
+      state.currentBatchCompletedTabs = [];
+      state.activeFillingTabId = tabsToReuse[0];
+      await saveState();
+
+      // Setup payloads and redirect recycled tabs to start the new batch
+      for (let i = 0; i < tabsToReuse.length; i++) {
+        const tId = tabsToReuse[i];
+        const locationIndex = state.assignedCount % locations.length;
+        const location = locations[locationIndex];
+
+        const listingPayload = {
+          ...state.listingsData,
+          location,
+          listingIndex: state.assignedCount
+        };
+
+        state.assignedCount++;
+        const key = `pendingAutofill_${tId}`;
+        await chrome.storage.local.set({ [key]: listingPayload });
+        runtimePendingData.set(tId, listingPayload);
+
+        try {
+          await chrome.tabs.update(tId, {
+            url: "https://www.facebook.com/marketplace/create/item",
+            active: (i === 0)
+          });
+        } catch (e) {
+          console.error("[BG] Failed to update recycled tab:", tId, e);
+        }
+      }
+
+      await saveState();
+      return { stay: true };
+
+    } else {
+      // No more listings to assign. Close tabs and finish Phase 1.
+      for (const tId of state.currentBatchTabs) {
+        try { await chrome.tabs.remove(tId); } catch (e) {}
+      }
+      state.currentBatchTabs = [];
+      await saveState();
+      await finishPhase1();
+      return { close: true };
+    }
   }
 }
 
@@ -225,8 +306,33 @@ chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
 
   if (state.activeJob && state.currentBatchTabs.includes(tabId)) {
     console.log("[BG] Tab removed manually:", tabId);
+    const wasActiveFilling = (state.activeFillingTabId === tabId);
+    const index = state.currentBatchTabs.indexOf(tabId);
+
     state.currentBatchTabs = state.currentBatchTabs.filter(id => id !== tabId);
+    if (state.currentBatchCompletedTabs) {
+      state.currentBatchCompletedTabs = state.currentBatchCompletedTabs.filter(id => id !== tabId);
+    }
     runtimePendingData.delete(tabId);
+
+    if (wasActiveFilling && state.currentBatchTabs.length > 0) {
+      const nextIndex = Math.min(index, state.currentBatchTabs.length - 1);
+      const nextTabId = state.currentBatchTabs[nextIndex];
+      state.activeFillingTabId = nextTabId;
+      await saveState();
+
+      try {
+        await chrome.tabs.update(nextTabId, { active: true });
+        const nextKey = `pendingAutofill_${nextTabId}`;
+        chrome.storage.local.get([nextKey], (res) => {
+          if (res[nextKey]) {
+            chrome.tabs.sendMessage(nextTabId, { action: "START_FILLING", data: res[nextKey] }, () => {
+              if (chrome.runtime.lastError) {}
+            });
+          }
+        });
+      } catch (e) {}
+    }
 
     // If tab was closed manually but we still need to create more listings, open a replacement tab!
     if (state.assignedCount < state.totalToCreate) {

@@ -1078,13 +1078,29 @@ async function init() {
   console.log("[INIT] Page:", url);
 
   if (url.includes("/marketplace/create/item")) {
+    const startFillingListener = async (message, sender, sendResponse) => {
+      if (message.action === "START_FILLING" && message.data) {
+        chrome.runtime.onMessage.removeListener(startFillingListener);
+        console.log("[CONTENT] START_FILLING message received, starting autofill...");
+        const storage = await chrome.storage.local.get("draftListing");
+        const images = (storage.draftListing && storage.draftListing.images) || [];
+        const fullData = { ...message.data, images };
+        runPhase1(fullData);
+      }
+    };
+    chrome.runtime.onMessage.addListener(startFillingListener);
+
     // Phase 1: autofill form
     chrome.runtime.sendMessage({ action: "GET_MY_PENDING_DATA" }, async (res) => {
       if (res && res.data) {
+        chrome.runtime.onMessage.removeListener(startFillingListener);
+        console.log("[CONTENT] GET_MY_PENDING_DATA returned data, starting autofill...");
         const storage = await chrome.storage.local.get("draftListing");
         const images = (storage.draftListing && storage.draftListing.images) || [];
         const fullData = { ...res.data, images };
         runPhase1(fullData);
+      } else {
+        console.log("[INIT] Waiting for active focus / activation message to start filling...");
       }
     });
 
