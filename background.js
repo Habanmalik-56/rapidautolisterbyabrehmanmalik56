@@ -12,7 +12,9 @@ let state = {
   currentBatchIndex: 0,
   batchOpening: false,
   activeFillingTabId: null,
-  currentBatchCompletedTabs: []
+  currentBatchCompletedTabs: [],
+  listingQueue: [],
+  currentQueueIndex: 0
 };
 
 async function saveState() {
@@ -116,6 +118,7 @@ async function handleMessageAsync(message, sender, sendResponse) {
 // BULK LISTING (Phase 1 — Create Drafts)
 // ============================================================
 async function startBulkListing(data) {
+  const { images, ...textData } = data;
   state = {
     activeJob: true,
     totalToCreate: parseInt(data.numListings) || 1,
@@ -123,36 +126,56 @@ async function startBulkListing(data) {
     assignedCount: 0,
     batchSize: 5,
     currentBatchTabs: [],
-    listingsData: null,
+    listingsData: textData,
     completedTabs: 0,
     totalBatchesNeeded: 0,
     currentBatchIndex: 0,
     batchOpening: false,
     activeFillingTabId: null,
-    currentBatchCompletedTabs: []
+    currentBatchCompletedTabs: [],
+    listingQueue: [],
+    currentQueueIndex: 0
   };
+  await saveState();
 
-  const { images, ...textData } = data;
-  state.listingsData = textData;
+  await startNextBatch();
+}
+
+async function startNextBatch() {
+  if (!state.activeJob) return;
+
   state.currentBatchTabs = [];
   state.currentBatchCompletedTabs = [];
-
+  state.listingQueue = [];
+  state.currentQueueIndex = 0;
+  state.activeFillingTabId = null;
   await saveState();
-  updateProgress("Starting bulk listing process...", 0);
 
-  const initialTabsCount = Math.min(state.batchSize, state.totalToCreate);
+  const remaining = state.totalToCreate - state.createdCount;
+  if (remaining <= 0) {
+    await finishPhase1();
+    return;
+  }
+
+  const batchCount = Math.min(state.batchSize, remaining);
   const locations = await getLocationsList();
 
-  for (let i = 0; i < initialTabsCount; i++) {
+  updateProgress(
+    `Opening batch of ${batchCount} tabs...`,
+    (state.createdCount / state.totalToCreate) * 100
+  );
+
+  for (let i = 0; i < batchCount; i++) {
     if (!state.activeJob) return;
 
-    const locationIndex = state.assignedCount % locations.length;
+    const currentAssignedIndex = state.createdCount + i;
+    const locationIndex = currentAssignedIndex % locations.length;
     const location = locations[locationIndex];
 
     const listingPayload = {
       ...state.listingsData,
       location,
-      listingIndex: state.assignedCount
+      listingIndex: currentAssignedIndex
     };
 
     const isActive = (i === 0);
@@ -161,17 +184,19 @@ async function startBulkListing(data) {
       active: isActive
     });
 
+    state.currentBatchTabs.push(tab.id);
+    state.listingQueue.push(listingPayload);
+
     if (isActive) {
       state.activeFillingTabId = tab.id;
     }
 
-    state.currentBatchTabs.push(tab.id);
     state.assignedCount++;
-    await saveState();
-
     const key = `pendingAutofill_${tab.id}`;
     await chrome.storage.local.set({ [key]: listingPayload });
     runtimePendingData.set(tab.id, listingPayload);
+    await saveState();
+
     await sleep(1500);
   }
 }
@@ -205,11 +230,13 @@ async function handleDraftSaved(tabId) {
   await chrome.storage.local.remove(`pendingAutofill_${tabId}`);
   runtimePendingData.delete(tabId);
 
-  // Check if we need to switch to the next tab in the current batch
-  const currentIndex = state.currentBatchTabs.indexOf(tabId);
-  if (currentIndex !== -1 && currentIndex + 1 < state.currentBatchTabs.length) {
-    // Switch to the next tab in the batch
-    const nextTabId = state.currentBatchTabs[currentIndex + 1];
+  // Move to next tab index in queue
+  state.currentQueueIndex++;
+  await saveState();
+
+  if (state.currentQueueIndex < state.currentBatchTabs.length) {
+    // Switch focus to next tab
+    const nextTabId = state.currentBatchTabs[state.currentQueueIndex];
     state.activeFillingTabId = nextTabId;
     await saveState();
 
@@ -219,7 +246,7 @@ async function handleDraftSaved(tabId) {
       console.error("[BG] Failed to activate next tab:", nextTabId, e);
     }
 
-    // Send START_FILLING to the next tab
+    // Send START_FILLING message to next tab
     const nextKey = `pendingAutofill_${nextTabId}`;
     chrome.storage.local.get([nextKey], (result) => {
       const payload = result[nextKey];
@@ -235,63 +262,21 @@ async function handleDraftSaved(tabId) {
     return { stay: true };
 
   } else {
-    // All tabs in this batch have finished
-    // Check if we still have more listings to create
-    if (state.assignedCount < state.totalToCreate) {
-      const locations = await getLocationsList();
-      const remaining = state.totalToCreate - state.assignedCount;
-      const nextBatchSize = Math.min(state.batchSize, remaining);
+    // All tabs in this batch have finished! Close them.
+    for (const tId of state.currentBatchTabs) {
+      try { await chrome.tabs.remove(tId); } catch (e) {}
+    }
+    state.currentBatchTabs = [];
+    state.activeFillingTabId = null;
+    await saveState();
 
-      // Reuse the first nextBatchSize tabs, close the rest
-      const tabsToReuse = state.currentBatchTabs.slice(0, nextBatchSize);
-      const tabsToClose = state.currentBatchTabs.slice(nextBatchSize);
+    // Small delay to let tabs close cleanly
+    await sleep(2000);
 
-      for (const tId of tabsToClose) {
-        try { await chrome.tabs.remove(tId); } catch (e) {}
-      }
-
-      state.currentBatchTabs = tabsToReuse;
-      state.currentBatchCompletedTabs = [];
-      state.activeFillingTabId = tabsToReuse[0];
-      await saveState();
-
-      // Setup payloads and redirect recycled tabs to start the new batch
-      for (let i = 0; i < tabsToReuse.length; i++) {
-        const tId = tabsToReuse[i];
-        const locationIndex = state.assignedCount % locations.length;
-        const location = locations[locationIndex];
-
-        const listingPayload = {
-          ...state.listingsData,
-          location,
-          listingIndex: state.assignedCount
-        };
-
-        state.assignedCount++;
-        const key = `pendingAutofill_${tId}`;
-        await chrome.storage.local.set({ [key]: listingPayload });
-        runtimePendingData.set(tId, listingPayload);
-
-        try {
-          await chrome.tabs.update(tId, {
-            url: "https://www.facebook.com/marketplace/create/item",
-            active: (i === 0)
-          });
-        } catch (e) {
-          console.error("[BG] Failed to update recycled tab:", tId, e);
-        }
-      }
-
-      await saveState();
+    if (state.createdCount < state.totalToCreate) {
+      await startNextBatch();
       return { stay: true };
-
     } else {
-      // No more listings to assign. Close tabs and finish Phase 1.
-      for (const tId of state.currentBatchTabs) {
-        try { await chrome.tabs.remove(tId); } catch (e) {}
-      }
-      state.currentBatchTabs = [];
-      await saveState();
       await finishPhase1();
       return { close: true };
     }
@@ -317,6 +302,7 @@ chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
 
     if (wasActiveFilling && state.currentBatchTabs.length > 0) {
       const nextIndex = Math.min(index, state.currentBatchTabs.length - 1);
+      state.currentQueueIndex = nextIndex;
       const nextTabId = state.currentBatchTabs[nextIndex];
       state.activeFillingTabId = nextTabId;
       await saveState();
@@ -352,6 +338,7 @@ chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
       });
 
       state.currentBatchTabs.push(tab.id);
+      state.listingQueue.push(listingPayload);
       state.assignedCount++;
       await saveState();
 
