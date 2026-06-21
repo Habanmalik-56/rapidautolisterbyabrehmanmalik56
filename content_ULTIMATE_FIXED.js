@@ -5,6 +5,48 @@
 // Helper functions
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+function ensureTabVisible() {
+  return new Promise((resolve) => {
+    if (!document.hidden && document.visibilityState === "visible") {
+      resolve();
+      return;
+    }
+    console.log("[Lister Logs] Tab is hidden. Pausing execution until tab becomes visible... VisibilityState:", document.visibilityState);
+    const handleVisibilityChange = () => {
+      if (!document.hidden && document.visibilityState === "visible") {
+        document.removeEventListener("visibilitychange", handleVisibilityChange);
+        console.log("[Lister Logs] Tab became visible. Resuming execution... VisibilityState:", document.visibilityState);
+        resolve();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+  });
+}
+
+async function executeStep(stepName, stepFn) {
+  await ensureTabVisible();
+  console.log(`[Lister Logs] Executing Step: ${stepName} | Hidden: ${document.hidden} | Visibility: ${document.visibilityState}`);
+  
+  let attempts = 0;
+  const maxAttempts = 5;
+  
+  while (attempts < maxAttempts) {
+    await ensureTabVisible();
+    try {
+      const result = await stepFn();
+      console.log(`[Lister Logs] Step: ${stepName} completed successfully.`);
+      return result;
+    } catch (error) {
+      attempts++;
+      console.warn(`[Lister Logs] Step: ${stepName} failed (Attempt ${attempts}/${maxAttempts}):`, error.message);
+      if (attempts >= maxAttempts) {
+        throw error;
+      }
+      await sleep(2000); // Wait before retry
+    }
+  }
+}
+
 function typeIntoField(element, text) {
   if (!element) return;
   element.focus();
@@ -377,164 +419,186 @@ async function findDropdownByPlaceholderText(keywords, timeoutMs = 8000) {
 // PHASE 1: CREATE DRAFTS (autofill form)
 // ============================================================
 async function runPhase1(data) {
-  console.log("Rapid Lister Pro: Starting autofill sequence...", data);
+  console.log("[Lister Logs] Rapid Lister Pro: Starting queue-based autofill sequence...", data);
   try {
     // 1. PHOTO UPLOAD
-    console.log("Step 1: Uploading Photos");
-    if (data.images && data.images.length > 0) {
-      const imgIdx = (data.listingIndex || 0) % data.images.length;
-      await uploadPhoto(data.images[imgIdx], `photo_${imgIdx}.jpg`);
-    } else {
-      console.warn("No photos provided for listing");
-    }
-
-    // 2. TITLE
-    console.log("Step 2: Filling Title");
-    const titleInput = await waitForElement(() =>
-      findFieldByLabel("Title", "input") || document.querySelector('input[type="text"][maxlength="100"]')
-    );
-    typeIntoField(titleInput, data.title);
-    await sleep(150);
-
-    // 3. PRICE
-    console.log("Step 3: Filling Price");
-    const priceInput = findFieldByLabel("Price", "input") ||
-      document.querySelector('input[type="text"][inputmode="numeric"]') ||
-      document.querySelector('input[inputmode="numeric"]');
-    typeIntoField(priceInput, data.price);
-    await sleep(150);
-
-    // 4. CATEGORY
-    console.log("Step 4: Selecting Category");
-    const categoryDrop = await findDropdownByPlaceholderText(
-      ["category", "categoría", "categoria"]
-    );
-    if (categoryDrop && data.category) {
-      const catSuccess = await selectDropdownOption(categoryDrop, data.category);
-      if (!catSuccess) {
-        console.warn("[CATEGORY] Primary select failed, trying fallback...");
-        // Fallback: try clicking the dropdown again and using keyboard
-        categoryDrop.click();
-        await sleep(1000);
-        // Type first letter to jump to category
-        const firstLetter = data.category.charAt(0).toLowerCase();
-        categoryDrop.dispatchEvent(new KeyboardEvent('keydown', { key: firstLetter, code: 'Key' + firstLetter.toUpperCase(), keyCode: firstLetter.charCodeAt(0), bubbles: true }));
-        await sleep(500);
-        categoryDrop.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
-        await sleep(1500);
-      }
-      await sleep(1200);
-    } else {
-      console.warn("[CATEGORY] Dropdown not found — skipping");
-    }
-
-    // 5. CONDITION
-    console.log("Step 5: Selecting Condition");
-    const conditionDrop = await findDropdownByPlaceholderText(
-      ["condition", "estado", "condición"]
-    );
-    if (conditionDrop && data.condition) {
-      await selectDropdownOption(conditionDrop, data.condition);
-      await sleep(800);
-    } else {
-      console.warn("[CONDITION] Dropdown not found — skipping");
-    }
-
-    // 6. DESCRIPTION
-    console.log("Step 6: Filling Description");
-    const descTextarea = findFieldByLabel("Description", "textarea") ||
-      document.querySelector('textarea[aria-label="Description" i]') ||
-      document.querySelector('textarea[aria-label="Descripción" i]') ||
-      document.querySelector('textarea');
-    if (descTextarea) {
-      typeIntoField(descTextarea, data.description);
-      await sleep(150);
-    }
-
-    // 7. AVAILABILITY
-    console.log("Step 7: Selecting Availability");
-    const availDrop = await findDropdownByPlaceholderText(
-      ["availability", "disponibilidad", "list as single", "single item", "listed"]
-    );
-    if (availDrop && data.availability) {
-      await selectDropdownOption(availDrop, data.availability);
-      await sleep(800);
-    } else {
-      console.warn("[AVAILABILITY] Dropdown not found — skipping");
-    }
-
-    // 8. PRODUCT TAGS
-    console.log("Step 8: Adding Product Tags");
-    const tagsInput = findFieldByLabel("Product tags", "textarea") ||
-      findFieldByLabel("Tags", "input") ||
-      document.querySelector('[aria-label="Product tags" i] textarea') ||
-      document.querySelector('[aria-label="Etiquetas" i] textarea');
-    if (tagsInput && data.tags) {
-      const tags = data.tags.split(',').map(t => t.trim()).filter(Boolean);
-      for (const tag of tags) {
-        typeIntoField(tagsInput, tag);
-        await sleep(80);
-        tagsInput.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Enter', code: 'Enter', keyCode: 13 }));
-        await sleep(80);
-      }
-    }
-
-    // 9. QUANTITY
-    if (data.quantity && parseInt(data.quantity) > 1) {
-      console.log("Step 9: Filling Quantity");
-      const qtyInput = findFieldByLabel("Quantity", "input") ||
-        document.querySelector('[aria-label="Quantity" i]') ||
-        document.querySelector('[aria-label="Cantidad" i]');
-      if (qtyInput) {
-        typeIntoField(qtyInput, data.quantity);
-        await sleep(150);
-      }
-    }
-
-    // 10. LOCATION
-    if (data.location) {
-      console.log("Step 10: Setting location...");
-      await sleep(150);
-      const locSuccess = await setLocation(data.location);
-      if (!locSuccess) {
-        console.warn("[LOCATION] setLocation returned false, retrying once...");
-        await sleep(1000);
-        await setLocation(data.location);
-      }
-      await sleep(400);
-    }
-
-    // 11. SAVE DRAFT
-    console.log("Step 11: Saving Draft");
-    const saveDraftBtn = [...document.querySelectorAll('div[role="button"], span')]
-      .find(el =>
-        el.textContent.toLowerCase() === 'save draft' ||
-        el.textContent.toLowerCase() === 'save as draft' ||
-        el.textContent.toLowerCase() === 'guardar borrador'
-      );
-
-    if (saveDraftBtn) {
-      saveDraftBtn.click();
-    } else {
-      const fallbackBtn = [...document.querySelectorAll('div[role="button"]')]
-        .find(el => el.textContent.toLowerCase().includes('draft') || el.textContent.toLowerCase().includes('borrador'));
-      if (fallbackBtn) {
-        fallbackBtn.click();
+    await executeStep("Photo Upload", async () => {
+      console.log("[Lister Logs] Step 1: Uploading Photos");
+      if (data.images && data.images.length > 0) {
+        const imgIdx = (data.listingIndex || 0) % data.images.length;
+        await uploadPhoto(data.images[imgIdx], `photo_${imgIdx}.jpg`);
       } else {
-        throw new Error("Save Draft button not found");
-      }
-    }
-
-    await sleep(4000);
-    chrome.runtime.sendMessage({ action: "DRAFT_SAVED" }, (response) => {
-      if (response && response.nextUrl) {
-        console.log("[CONTENT] Reusing tab, redirecting to next listing...");
-        window.location.href = response.nextUrl;
+        console.warn("[Lister Logs] No photos provided for listing");
       }
     });
 
+    // 2. TITLE
+    await executeStep("Fill Title", async () => {
+      console.log("[Lister Logs] Step 2: Filling Title");
+      const titleInput = await waitForElement(() =>
+        findFieldByLabel("Title", "input") || document.querySelector('input[type="text"][maxlength="100"]')
+      );
+      typeIntoField(titleInput, data.title);
+      await sleep(150);
+    });
+
+    // 3. PRICE
+    await executeStep("Fill Price", async () => {
+      console.log("[Lister Logs] Step 3: Filling Price");
+      const priceInput = findFieldByLabel("Price", "input") ||
+        document.querySelector('input[type="text"][inputmode="numeric"]') ||
+        document.querySelector('input[inputmode="numeric"]');
+      if (!priceInput) throw new Error("Price field not found");
+      typeIntoField(priceInput, data.price);
+      await sleep(150);
+    });
+
+    // 4. CATEGORY
+    await executeStep("Select Category", async () => {
+      console.log("[Lister Logs] Step 4: Selecting Category");
+      const categoryDrop = await findDropdownByPlaceholderText(
+        ["category", "categoría", "categoria"]
+      );
+      if (categoryDrop && data.category) {
+        const catSuccess = await selectDropdownOption(categoryDrop, data.category);
+        if (!catSuccess) {
+          console.warn("[Lister Logs] [CATEGORY] Primary select failed, trying fallback...");
+          categoryDrop.click();
+          await sleep(1000);
+          const firstLetter = data.category.charAt(0).toLowerCase();
+          categoryDrop.dispatchEvent(new KeyboardEvent('keydown', { key: firstLetter, code: 'Key' + firstLetter.toUpperCase(), keyCode: firstLetter.charCodeAt(0), bubbles: true }));
+          await sleep(500);
+          categoryDrop.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+          await sleep(1500);
+        }
+        await sleep(1200);
+      } else {
+        throw new Error("Category dropdown or category value missing");
+      }
+    });
+
+    // 5. CONDITION
+    await executeStep("Select Condition", async () => {
+      console.log("[Lister Logs] Step 5: Selecting Condition");
+      const conditionDrop = await findDropdownByPlaceholderText(
+        ["condition", "estado", "condición"]
+      );
+      if (conditionDrop && data.condition) {
+        const condSuccess = await selectDropdownOption(conditionDrop, data.condition);
+        if (!condSuccess) throw new Error("Failed to select condition option");
+        await sleep(800);
+      } else {
+        throw new Error("Condition dropdown or condition value missing");
+      }
+    });
+
+    // 6. DESCRIPTION
+    await executeStep("Fill Description", async () => {
+      console.log("[Lister Logs] Step 6: Filling Description");
+      const descTextarea = findFieldByLabel("Description", "textarea") ||
+        document.querySelector('textarea[aria-label="Description" i]') ||
+        document.querySelector('textarea[aria-label="Descripción" i]') ||
+        document.querySelector('textarea');
+      if (!descTextarea) throw new Error("Description textarea not found");
+      typeIntoField(descTextarea, data.description);
+      await sleep(150);
+    });
+
+    // 7. AVAILABILITY
+    await executeStep("Select Availability", async () => {
+      console.log("[Lister Logs] Step 7: Selecting Availability");
+      const availDrop = await findDropdownByPlaceholderText(
+        ["availability", "disponibilidad", "list as single", "single item", "listed"]
+      );
+      if (availDrop && data.availability) {
+        const availSuccess = await selectDropdownOption(availDrop, data.availability);
+        if (!availSuccess) throw new Error("Failed to select availability option");
+        await sleep(800);
+      } else {
+        console.warn("[Lister Logs] Availability dropdown not found — skipping");
+      }
+    });
+
+    // 8. PRODUCT TAGS
+    await executeStep("Add Product Tags", async () => {
+      console.log("[Lister Logs] Step 8: Adding Product Tags");
+      const tagsInput = findFieldByLabel("Product tags", "textarea") ||
+        findFieldByLabel("Tags", "input") ||
+        document.querySelector('[aria-label="Product tags" i] textarea') ||
+        document.querySelector('[aria-label="Etiquetas" i] textarea');
+      if (tagsInput && data.tags) {
+        const tags = data.tags.split(',').map(t => t.trim()).filter(Boolean);
+        for (const tag of tags) {
+          typeIntoField(tagsInput, tag);
+          await sleep(80);
+          tagsInput.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Enter', code: 'Enter', keyCode: 13 }));
+          await sleep(80);
+        }
+      }
+    });
+
+    // 9. QUANTITY
+    await executeStep("Fill Quantity", async () => {
+      if (data.quantity && parseInt(data.quantity) > 1) {
+        console.log("[Lister Logs] Step 9: Filling Quantity");
+        const qtyInput = findFieldByLabel("Quantity", "input") ||
+          document.querySelector('[aria-label="Quantity" i]') ||
+          document.querySelector('[aria-label="Cantidad" i]');
+        if (qtyInput) {
+          typeIntoField(qtyInput, data.quantity);
+          await sleep(150);
+        }
+      }
+    });
+
+    // 10. LOCATION
+    await executeStep("Set Location", async () => {
+      if (data.location) {
+        console.log("[Lister Logs] Step 10: Setting location...");
+        await sleep(150);
+        const locSuccess = await setLocation(data.location);
+        if (!locSuccess) {
+          console.warn("[Lister Logs] [LOCATION] setLocation returned false, retrying once...");
+          await sleep(1000);
+          const secondLocSuccess = await setLocation(data.location);
+          if (!secondLocSuccess) throw new Error("Failed setting location");
+        }
+        await sleep(400);
+      }
+    });
+
+    // 11. SAVE DRAFT
+    await executeStep("Save Draft", async () => {
+      console.log("[Lister Logs] Step 11: Saving Draft");
+      const saveDraftBtn = [...document.querySelectorAll('div[role="button"], span')]
+        .find(el =>
+          el.textContent.toLowerCase() === 'save draft' ||
+          el.textContent.toLowerCase() === 'save as draft' ||
+          el.textContent.toLowerCase() === 'guardar borrador'
+        );
+
+      if (saveDraftBtn) {
+        saveDraftBtn.click();
+      } else {
+        const fallbackBtn = [...document.querySelectorAll('div[role="button"]')]
+          .find(el => el.textContent.toLowerCase().includes('draft') || el.textContent.toLowerCase().includes('borrador'));
+        if (fallbackBtn) {
+          fallbackBtn.click();
+        } else {
+          throw new Error("Save Draft button not found");
+        }
+      }
+      
+      console.log("[Lister Logs] Save Draft button clicked, waiting 5s for completion...");
+      await sleep(5000);
+    });
+
+    await ensureTabVisible();
+    console.log("[Lister Logs] Sending DRAFT_SAVED confirmation message to background script...");
+    chrome.runtime.sendMessage({ action: "DRAFT_SAVED" });
+
   } catch (error) {
-    console.error("Autofill process failed:", error);
+    console.error("[Lister Logs] Autofill process failed at step:", error.message);
   }
 }
 
@@ -1070,6 +1134,29 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
+async function waitUntilReadyToFill() {
+  console.log("[Lister Logs] Checking document readyState... Current state:", document.readyState);
+  while (document.readyState !== "complete") {
+    await sleep(500);
+  }
+  
+  console.log("[Lister Logs] Checking document visibilityState...");
+  await ensureTabVisible();
+  
+  console.log("[Lister Logs] Waiting for Marketplace form elements to render...");
+  for (let i = 0; i < 30; i++) {
+    await ensureTabVisible();
+    const fileInput = document.querySelector('input[type="file"][multiple]') || document.querySelector('input[type="file"]');
+    const titleInput = findFieldByLabel("Title", "input") || document.querySelector('input[type="text"][maxlength="100"]');
+    if (fileInput || titleInput) {
+      console.log("[Lister Logs] Form elements found in DOM!");
+      return;
+    }
+    await sleep(500);
+  }
+  console.warn("[Lister Logs] Marketplace form elements not found after 15s, continuing anyway...");
+}
+
 // ============================================================
 // MAIN INIT — runs on page load
 // ============================================================
@@ -1081,7 +1168,8 @@ async function init() {
     const startFillingListener = async (message, sender, sendResponse) => {
       if (message.action === "START_FILLING" && message.data) {
         chrome.runtime.onMessage.removeListener(startFillingListener);
-        console.log("[CONTENT] START_FILLING message received, starting autofill...");
+        console.log("[CONTENT] START_FILLING message received, starting verification checks...");
+        await waitUntilReadyToFill();
         const storage = await chrome.storage.local.get("draftListing");
         const images = (storage.draftListing && storage.draftListing.images) || [];
         const fullData = { ...message.data, images };
@@ -1094,7 +1182,8 @@ async function init() {
     chrome.runtime.sendMessage({ action: "GET_MY_PENDING_DATA" }, async (res) => {
       if (res && res.data) {
         chrome.runtime.onMessage.removeListener(startFillingListener);
-        console.log("[CONTENT] GET_MY_PENDING_DATA returned data, starting autofill...");
+        console.log("[CONTENT] GET_MY_PENDING_DATA returned data, starting verification checks...");
+        await waitUntilReadyToFill();
         const storage = await chrome.storage.local.get("draftListing");
         const images = (storage.draftListing && storage.draftListing.images) || [];
         const fullData = { ...res.data, images };

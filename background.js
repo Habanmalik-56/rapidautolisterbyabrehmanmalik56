@@ -152,6 +152,7 @@ async function startNextBatch() {
   await saveState();
 
   const remaining = state.totalToCreate - state.createdCount;
+  console.log(`[Lister Logs] [BG] startNextBatch called. Remaining listings: ${remaining}`);
   if (remaining <= 0) {
     await finishPhase1();
     return;
@@ -165,6 +166,7 @@ async function startNextBatch() {
     (state.createdCount / state.totalToCreate) * 100
   );
 
+  console.log(`[Lister Logs] [BG] Opening batch of ${batchCount} tabs. Total to create: ${state.totalToCreate}`);
   for (let i = 0; i < batchCount; i++) {
     if (!state.activeJob) return;
 
@@ -189,6 +191,7 @@ async function startNextBatch() {
 
     if (isActive) {
       state.activeFillingTabId = tab.id;
+      console.log(`[Lister Logs] [BG] Initial active filling tab set to: ${tab.id} (index 0)`);
     }
 
     state.assignedCount++;
@@ -213,6 +216,7 @@ async function handleDraftSaved(tabId) {
   if (!state.activeJob) return { close: true };
 
   state.createdCount++;
+  console.log(`[Lister Logs] [BG] Draft saved event from tab: ${tabId}. Total created so far: ${state.createdCount}/${state.totalToCreate}`);
   
   if (!state.currentBatchCompletedTabs) {
     state.currentBatchCompletedTabs = [];
@@ -240,10 +244,11 @@ async function handleDraftSaved(tabId) {
     state.activeFillingTabId = nextTabId;
     await saveState();
 
+    console.log(`[Lister Logs] [BG] Activating next tab in queue. Index: ${state.currentQueueIndex}, Tab ID: ${nextTabId}`);
     try {
       await chrome.tabs.update(nextTabId, { active: true });
     } catch (e) {
-      console.error("[BG] Failed to activate next tab:", nextTabId, e);
+      console.error("[Lister Logs] [BG] Failed to activate next tab:", nextTabId, e);
     }
 
     // Send START_FILLING message to next tab
