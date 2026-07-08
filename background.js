@@ -1,37 +1,54 @@
 const runtimePendingData = new Map();
 
 // ============================================================
-// SERVICE WORKER KEEP-ALIVE SYSTEM
+// SERVICE WORKER KEEP-ALIVE SYSTEM (v2 — PORT BASED)
 // ============================================================
 // MV3 service workers are auto-terminated by Chrome after ~30s
-// of no incoming events (a pending setTimeout does NOT count as
-// activity and will be silently lost if the worker dies).
-// This is the #1 reason automation "freezes" when the tab/window
-// is not actively watched/focused by the user.
+// of no incoming events. A pending setTimeout does NOT count as
+// activity and is silently lost if the worker dies mid-wait.
 //
-// Fix: a repeating chrome.alarms heartbeat. Alarms are guaranteed
-// by Chrome to wake the service worker back up even after it was
-// killed, resetting the 30s idle countdown every ~20 seconds.
+// IMPORTANT CORRECTION: chrome.alarms has a hard-enforced MINIMUM
+// period of 1 minute in production — a 20s alarm gets silently
+// clamped to 60s by Chrome, so alarms ALONE cannot cover the 30s
+// danger window. We fix this properly with a long-lived
+// chrome.runtime.Port connection: content scripts open a port and
+// ping it every ~15s. Each incoming port message is a real event
+// that resets the SW's 30s idle countdown, with no 1-minute floor.
+// chrome.alarms is kept ONLY as a 1-minute safety net in case no
+// tab/port is currently connected (e.g. between batches).
 // ============================================================
+const activePorts = new Set();
+
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "listerKeepAlive") return;
+  activePorts.add(port);
+  console.log("[KeepAlive] Port connected. Active ports:", activePorts.size);
+
+  port.onMessage.addListener((msg) => {
+    // Any message received = activity = idle timer reset. No-op needed.
+    if (msg && msg.ping) {
+      // Optionally ack back so the content script knows the SW is alive.
+      try { port.postMessage({ pong: true, t: Date.now() }); } catch (e) {}
+    }
+  });
+
+  port.onDisconnect.addListener(() => {
+    activePorts.delete(port);
+    console.log("[KeepAlive] Port disconnected. Active ports:", activePorts.size);
+  });
+});
+
+// Backup net: fires at most once per minute (Chrome's real floor),
+// covers gaps where no content-script tab/port is currently open.
 const KEEP_ALIVE_ALARM = "listerKeepAlive";
-
-function startKeepAlive() {
-  chrome.alarms.create(KEEP_ALIVE_ALARM, { periodInMinutes: 0.33 }); // ~20s
-}
-
+chrome.alarms.create(KEEP_ALIVE_ALARM, { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === KEEP_ALIVE_ALARM) {
-    // Touching storage is enough to count as "activity" and keep
-    // the worker warm; also lets us log to confirm it's alive.
     chrome.storage.local.get("bulkState", () => {
-      console.log("[KeepAlive] Service worker heartbeat @", new Date().toISOString());
+      console.log("[KeepAlive] Alarm backup heartbeat @", new Date().toISOString());
     });
   }
 });
-
-// Start heartbeat immediately when the service worker itself loads
-// (covers cases where Chrome restarts the SW mid-job after a kill).
-startKeepAlive();
 
 let state = {
   activeJob: false,

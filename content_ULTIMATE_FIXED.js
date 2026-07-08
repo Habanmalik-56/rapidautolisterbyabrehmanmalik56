@@ -104,6 +104,38 @@ function ensureTabVisible() {
   return Promise.resolve();
 }
 
+// ============================================================
+// KEEP-ALIVE PORT — pings background.js every 15s so the
+// MV3 service worker never idles out (30s kill timer) while this
+// tab is running automation, even if the tab is not focused/visible.
+// ============================================================
+let _keepAlivePort = null;
+let _keepAliveInterval = null;
+
+function startKeepAlivePort() {
+  try {
+    _keepAlivePort = chrome.runtime.connect({ name: "listerKeepAlive" });
+    _keepAlivePort.onDisconnect.addListener(() => {
+      console.log("[KeepAlive] Port disconnected, reconnecting in 1s...");
+      _keepAlivePort = null;
+      setTimeout(startKeepAlivePort, 1000);
+    });
+    if (_keepAliveInterval) clearInterval(_keepAliveInterval);
+    _keepAliveInterval = setInterval(() => {
+      try {
+        if (_keepAlivePort) _keepAlivePort.postMessage({ ping: true, t: Date.now() });
+      } catch (e) {
+        // Port died (SW restarted) — reconnect
+        startKeepAlivePort();
+      }
+    }, 15000);
+    console.log("[KeepAlive] Port connected to background.");
+  } catch (e) {
+    console.warn("[KeepAlive] Failed to connect port:", e);
+  }
+}
+startKeepAlivePort();
+
 // Map sleepVisible and sleep to use the unthrottled background sleep
 async function sleepVisible(ms) {
   await bgSleep(ms);
