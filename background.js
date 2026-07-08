@@ -108,6 +108,11 @@ async function handleMessageAsync(message, sender, sendResponse) {
 
   } else if (message.action === "PUBLISH_COMPLETE") {
     sendResponse({ status: "acknowledged" });
+  } else if (message.action === "BG_SLEEP") {
+    setTimeout(() => {
+      sendResponse({ status: "done" });
+    }, message.ms);
+    return true; // Keep message channel open for async response
   }
 }
 

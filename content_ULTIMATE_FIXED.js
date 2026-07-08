@@ -2,30 +2,107 @@
 // RAPID LISTER PRO - content_ULTIMATE.js (Complete Rewrite)
 // ============================================================
 
-// Helper functions
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+// ============================================================
+// DIAGNOSTIC WATCHDOG + VISIBLE-SLEEP SYSTEM
+// Root cause: Chrome throttles setTimeout in background tabs
+// to once per minute. Every sleep(3000) becomes 60+ seconds.
+// Fix: sleepVisible() only counts down while tab is visible.
+// Watchdog: reports exact freeze point every 60 seconds.
+// ============================================================
 
-function ensureTabVisible() {
-  return new Promise((resolve) => {
-    if (!document.hidden && document.visibilityState === "visible") {
-      resolve();
-      return;
+// --- Tracking state ---
+let _watchdogTabId = null;
+let _watchdogQueueIndex = 0;
+let _lastActionTime = Date.now();
+let _currentField = "not started";
+let _currentWaiting = "none";
+let _watchdogInterval = null;
+let _phaseRunning = false;
+
+function setWaiting(condition) {
+  _currentWaiting = condition;
+  _lastActionTime = Date.now();
+  console.log(`[Lister Watchdog] ⏳ Waiting: ${condition} | Tab: ${_watchdogTabId} | Queue: ${_watchdogQueueIndex} | Hidden: ${document.hidden} | Visibility: ${document.visibilityState}`);
+}
+
+function setField(fieldName) {
+  _currentField = fieldName;
+  _lastActionTime = Date.now();
+  _currentWaiting = "none";
+  console.log(`[Lister Watchdog] 🔧 Processing field: ${fieldName} | Tab: ${_watchdogTabId} | Queue: ${_watchdogQueueIndex} | Hidden: ${document.hidden}`);
+}
+
+function startWatchdog(tabId, queueIndex) {
+  _watchdogTabId = tabId;
+  _watchdogQueueIndex = queueIndex;
+  _lastActionTime = Date.now();
+  _phaseRunning = true;
+
+  if (_watchdogInterval) clearInterval(_watchdogInterval);
+  _watchdogInterval = setInterval(() => {
+    if (!_phaseRunning) return;
+    const stuckSec = Math.round((Date.now() - _lastActionTime) / 1000);
+    const logLine = [
+      `[Lister Watchdog] ⚠️ FREEZE REPORT — stuck for ${stuckSec}s`,
+      `  Tab ID      : ${_watchdogTabId}`,
+      `  Queue Index : ${_watchdogQueueIndex}`,
+      `  Field       : ${_currentField}`,
+      `  Waiting for : ${_currentWaiting}`,
+      `  document.hidden         : ${document.hidden}`,
+      `  document.visibilityState: ${document.visibilityState}`,
+      `  document.readyState     : ${document.readyState}`,
+      `  Timestamp   : ${new Date().toISOString()}`,
+    ].join('\n');
+    if (stuckSec >= 60) {
+      console.error(logLine);
+    } else {
+      console.log(logLine);
     }
-    console.log("[Lister Logs] Tab is hidden. Pausing execution until tab becomes visible... VisibilityState:", document.visibilityState);
-    const handleVisibilityChange = () => {
-      if (!document.hidden && document.visibilityState === "visible") {
-        document.removeEventListener("visibilitychange", handleVisibilityChange);
-        console.log("[Lister Logs] Tab became visible. Resuming execution... VisibilityState:", document.visibilityState);
-        resolve();
-      }
-    };
-    document.addEventListener("visibilitychange", handleVisibilityChange);
+  }, 10000); // report every 10s
+}
+
+function stopWatchdog() {
+  _phaseRunning = false;
+  if (_watchdogInterval) {
+    clearInterval(_watchdogInterval);
+    _watchdogInterval = null;
+  }
+  console.log(`[Lister Watchdog] ✅ Watchdog stopped. Tab: ${_watchdogTabId}`);
+}
+
+// --- Background-safe sleep system ---
+// Sends a message to the background service worker to sleep, bypassing local tab throttling.
+function bgSleep(ms) {
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage({ action: "BG_SLEEP", ms }, () => {
+        if (chrome.runtime.lastError) {
+          setTimeout(resolve, ms);
+        } else {
+          resolve();
+        }
+      });
+    } catch (e) {
+      setTimeout(resolve, ms);
+    }
   });
 }
 
+// Bypasses visibility check entirely to allow background processing
+function ensureTabVisible() {
+  return Promise.resolve();
+}
+
+// Map sleepVisible and sleep to use the unthrottled background sleep
+async function sleepVisible(ms) {
+  await bgSleep(ms);
+}
+
+const sleep = ms => bgSleep(ms);
+
 async function executeStep(stepName, stepFn) {
   await ensureTabVisible();
-  console.log(`[Lister Logs] Executing Step: ${stepName} | Hidden: ${document.hidden} | Visibility: ${document.visibilityState}`);
+  setField(stepName);
   
   let attempts = 0;
   const maxAttempts = 5;
@@ -34,15 +111,16 @@ async function executeStep(stepName, stepFn) {
     await ensureTabVisible();
     try {
       const result = await stepFn();
-      console.log(`[Lister Logs] Step: ${stepName} completed successfully.`);
+      console.log(`[Lister Logs] ✅ Step: ${stepName} completed.`);
+      _lastActionTime = Date.now();
       return result;
     } catch (error) {
       attempts++;
-      console.warn(`[Lister Logs] Step: ${stepName} failed (Attempt ${attempts}/${maxAttempts}):`, error.message);
+      console.warn(`[Lister Logs] ⚠️ Step: ${stepName} failed (Attempt ${attempts}/${maxAttempts}): ${error.message}`);
       if (attempts >= maxAttempts) {
         throw error;
       }
-      await sleep(2000); // Wait before retry
+      await sleepVisible(2000);
     }
   }
 }
@@ -75,7 +153,8 @@ async function uploadPhoto(base64Image, filename) {
   dataTransfer.items.add(file);
   fileInput.files = dataTransfer.files;
   fileInput.dispatchEvent(new Event('change', { bubbles: true }));
-  await sleep(15000);
+  setWaiting("Waiting 15s for photo upload to complete");
+  await sleepVisible(15000);
 }
 
 async function selectDropdownOption(dropdownEl, optionText) {
@@ -87,7 +166,8 @@ async function selectDropdownOption(dropdownEl, optionText) {
   for (let retry = 0; retry < 3; retry++) {
     // Step 1: Open dropdown with multiple interaction methods
     dropdownEl.scrollIntoView({ block: "center" });
-    await sleep(600);
+    setWaiting(`selectDropdownOption: opening dropdown for "${optionText}"`);
+    await sleepVisible(600);
 
     // Try clicking the dropdown button itself
     const clickTargets = [
@@ -101,7 +181,7 @@ async function selectDropdownOption(dropdownEl, optionText) {
     for (const target of clickTargets) {
       try {
         target.focus();
-        await sleep(100);
+        await sleepVisible(100);
         ["mousedown", "mouseup", "click"].forEach(type => {
           target.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
         });
@@ -110,7 +190,8 @@ async function selectDropdownOption(dropdownEl, optionText) {
       } catch(e) {}
     }
 
-    await sleep(3000); // Wait for Facebook React to render dropdown
+    setWaiting(`selectDropdownOption: waiting for React to render dropdown for "${optionText}"`);
+    await sleepVisible(3000); // Wait for Facebook React to render dropdown
 
     // Step 2: Find ALL visible text elements in the dropdown
     // Facebook uses nested divs/spans inside role="listbox", role="menu", etc.
@@ -186,7 +267,8 @@ async function selectDropdownOption(dropdownEl, optionText) {
 
       // Scroll to make sure it's visible
       target.scrollIntoView({ block: "center" });
-      await sleep(800);
+      setWaiting(`selectDropdownOption: clicking option "${optionText}"`);
+      await sleepVisible(800);
 
       // Find deepest text-containing child
       let clickTarget = target;
@@ -245,19 +327,21 @@ async function selectDropdownOption(dropdownEl, optionText) {
       clickFn(clickTarget);
 
       if (clickableAncestor && clickableAncestor !== clickTarget) {
-        await sleep(100);
+        await sleepVisible(100);
         console.log("[SELECT] Clicking clickableAncestor...");
         clickFn(clickableAncestor);
       }
 
       // Keyboard events as backup
-      await sleep(300);
+      setWaiting(`selectDropdownOption: keyboard confirm for "${optionText}"`);
+      await sleepVisible(300);
       const kbTarget = clickableAncestor || clickTarget;
       kbTarget.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true, cancelable: true }));
-      await sleep(100);
+      await sleepVisible(100);
       kbTarget.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true, cancelable: true }));
 
-      await sleep(3000);
+      setWaiting(`selectDropdownOption: waiting 3s for dropdown to close after selecting "${optionText}"`);
+      await sleepVisible(3000);
 
       // Check if closed
       const dropdownOpen = document.querySelector('[role="listbox"]') || 
@@ -272,7 +356,7 @@ async function selectDropdownOption(dropdownEl, optionText) {
 
       console.log("[SELECT] Dropdown still open, clicking target directly...");
       try { target.click(); } catch(e) {}
-      await sleep(2000);
+      await sleepVisible(2000);
       return true;
     }
 
@@ -280,7 +364,8 @@ async function selectDropdownOption(dropdownEl, optionText) {
 
     // Close any open dropdown with Escape
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
-    await sleep(2000);
+    setWaiting(`selectDropdownOption: retry ${retry + 1}/3 for "${optionText}" — waiting 2s`);
+    await sleepVisible(2000);
   }
 
   console.error("[SELECT] FAILED after 3 retries:", optionText);
@@ -289,6 +374,7 @@ async function selectDropdownOption(dropdownEl, optionText) {
   return new Promise((resolve, reject) => {
     const el = selectorFn();
     if (el) return resolve(el);
+    setWaiting(`waitForElement: polling for DOM element (timeout: ${timeoutMs}ms)`);
     const observer = new MutationObserver(() => {
       const found = selectorFn();
       if (found) {
@@ -419,7 +505,11 @@ async function findDropdownByPlaceholderText(keywords, timeoutMs = 8000) {
 // PHASE 1: CREATE DRAFTS (autofill form)
 // ============================================================
 async function runPhase1(data) {
-  console.log("[Lister Logs] Rapid Lister Pro: Starting queue-based autofill sequence...", data);
+  const myTabId = data._tabId || "unknown";
+  const myQueueIdx = data._queueIndex !== undefined ? data._queueIndex : "?";
+  startWatchdog(myTabId, myQueueIdx);
+  console.log(`[Lister Watchdog] 🚀 runPhase1 started | Tab: ${myTabId} | Queue: ${myQueueIdx} | Hidden: ${document.hidden} | Visibility: ${document.visibilityState}`);
+  _lastActionTime = Date.now();
   try {
     // 1. PHOTO UPLOAD
     await executeStep("Photo Upload", async () => {
@@ -439,7 +529,7 @@ async function runPhase1(data) {
         findFieldByLabel("Title", "input") || document.querySelector('input[type="text"][maxlength="100"]')
       );
       typeIntoField(titleInput, data.title);
-      await sleep(150);
+      await sleepVisible(150);
     });
 
     // 3. PRICE
@@ -450,7 +540,7 @@ async function runPhase1(data) {
         document.querySelector('input[inputmode="numeric"]');
       if (!priceInput) throw new Error("Price field not found");
       typeIntoField(priceInput, data.price);
-      await sleep(150);
+      await sleepVisible(150);
     });
 
     // 4. CATEGORY
@@ -464,14 +554,14 @@ async function runPhase1(data) {
         if (!catSuccess) {
           console.warn("[Lister Logs] [CATEGORY] Primary select failed, trying fallback...");
           categoryDrop.click();
-          await sleep(1000);
+          await sleepVisible(1000);
           const firstLetter = data.category.charAt(0).toLowerCase();
           categoryDrop.dispatchEvent(new KeyboardEvent('keydown', { key: firstLetter, code: 'Key' + firstLetter.toUpperCase(), keyCode: firstLetter.charCodeAt(0), bubbles: true }));
-          await sleep(500);
+          await sleepVisible(500);
           categoryDrop.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
-          await sleep(1500);
+          await sleepVisible(1500);
         }
-        await sleep(1200);
+        await sleepVisible(1200);
       } else {
         throw new Error("Category dropdown or category value missing");
       }
@@ -486,7 +576,7 @@ async function runPhase1(data) {
       if (conditionDrop && data.condition) {
         const condSuccess = await selectDropdownOption(conditionDrop, data.condition);
         if (!condSuccess) throw new Error("Failed to select condition option");
-        await sleep(800);
+        await sleepVisible(800);
       } else {
         throw new Error("Condition dropdown or condition value missing");
       }
@@ -501,7 +591,7 @@ async function runPhase1(data) {
         document.querySelector('textarea');
       if (!descTextarea) throw new Error("Description textarea not found");
       typeIntoField(descTextarea, data.description);
-      await sleep(150);
+      await sleepVisible(150);
     });
 
     // 7. AVAILABILITY
@@ -513,7 +603,7 @@ async function runPhase1(data) {
       if (availDrop && data.availability) {
         const availSuccess = await selectDropdownOption(availDrop, data.availability);
         if (!availSuccess) throw new Error("Failed to select availability option");
-        await sleep(800);
+        await sleepVisible(800);
       } else {
         console.warn("[Lister Logs] Availability dropdown not found — skipping");
       }
@@ -530,9 +620,9 @@ async function runPhase1(data) {
         const tags = data.tags.split(',').map(t => t.trim()).filter(Boolean);
         for (const tag of tags) {
           typeIntoField(tagsInput, tag);
-          await sleep(80);
+          await sleepVisible(80);
           tagsInput.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Enter', code: 'Enter', keyCode: 13 }));
-          await sleep(80);
+          await sleepVisible(80);
         }
       }
     });
@@ -546,7 +636,7 @@ async function runPhase1(data) {
           document.querySelector('[aria-label="Cantidad" i]');
         if (qtyInput) {
           typeIntoField(qtyInput, data.quantity);
-          await sleep(150);
+          await sleepVisible(150);
         }
       }
     });
@@ -555,15 +645,16 @@ async function runPhase1(data) {
     await executeStep("Set Location", async () => {
       if (data.location) {
         console.log("[Lister Logs] Step 10: Setting location...");
-        await sleep(150);
+        setWaiting("Waiting for location field to be interactable");
+        await sleepVisible(150);
         const locSuccess = await setLocation(data.location);
         if (!locSuccess) {
           console.warn("[Lister Logs] [LOCATION] setLocation returned false, retrying once...");
-          await sleep(1000);
+          await sleepVisible(1000);
           const secondLocSuccess = await setLocation(data.location);
           if (!secondLocSuccess) throw new Error("Failed setting location");
         }
-        await sleep(400);
+        await sleepVisible(400);
       }
     });
 
@@ -589,16 +680,19 @@ async function runPhase1(data) {
         }
       }
       
+      setWaiting("Waiting 5s after Save Draft click for Facebook to process");
       console.log("[Lister Logs] Save Draft button clicked, waiting 5s for completion...");
-      await sleep(5000);
+      await sleepVisible(5000);
     });
 
     await ensureTabVisible();
-    console.log("[Lister Logs] Sending DRAFT_SAVED confirmation message to background script...");
+    stopWatchdog();
+    console.log("[Lister Logs] ✅ All steps complete. Sending DRAFT_SAVED to background script...");
     chrome.runtime.sendMessage({ action: "DRAFT_SAVED" });
 
   } catch (error) {
-    console.error("[Lister Logs] Autofill process failed at step:", error.message);
+    stopWatchdog();
+    console.error("[Lister Logs] ❌ Autofill failed at step:", _currentField, "| Error:", error.message);
   }
 }
 
