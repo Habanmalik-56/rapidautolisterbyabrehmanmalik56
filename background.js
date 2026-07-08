@@ -1,5 +1,38 @@
 const runtimePendingData = new Map();
 
+// ============================================================
+// SERVICE WORKER KEEP-ALIVE SYSTEM
+// ============================================================
+// MV3 service workers are auto-terminated by Chrome after ~30s
+// of no incoming events (a pending setTimeout does NOT count as
+// activity and will be silently lost if the worker dies).
+// This is the #1 reason automation "freezes" when the tab/window
+// is not actively watched/focused by the user.
+//
+// Fix: a repeating chrome.alarms heartbeat. Alarms are guaranteed
+// by Chrome to wake the service worker back up even after it was
+// killed, resetting the 30s idle countdown every ~20 seconds.
+// ============================================================
+const KEEP_ALIVE_ALARM = "listerKeepAlive";
+
+function startKeepAlive() {
+  chrome.alarms.create(KEEP_ALIVE_ALARM, { periodInMinutes: 0.33 }); // ~20s
+}
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === KEEP_ALIVE_ALARM) {
+    // Touching storage is enough to count as "activity" and keep
+    // the worker warm; also lets us log to confirm it's alive.
+    chrome.storage.local.get("bulkState", () => {
+      console.log("[KeepAlive] Service worker heartbeat @", new Date().toISOString());
+    });
+  }
+});
+
+// Start heartbeat immediately when the service worker itself loads
+// (covers cases where Chrome restarts the SW mid-job after a kill).
+startKeepAlive();
+
 let state = {
   activeJob: false,
   totalToCreate: 0,
