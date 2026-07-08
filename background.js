@@ -54,17 +54,9 @@ let state = {
   activeJob: false,
   totalToCreate: 0,
   createdCount: 0,
-  batchSize: 5,
-  currentBatchTabs: [],
   listingsData: null,
-  completedTabs: 0,
-  totalBatchesNeeded: 0,
-  currentBatchIndex: 0,
-  batchOpening: false,
   activeFillingTabId: null,
-  currentBatchCompletedTabs: [],
-  listingQueue: [],
-  currentQueueIndex: 0
+  currentListingIndex: 0
 };
 
 async function saveState() {
@@ -174,88 +166,67 @@ async function startBulkListing(data) {
     activeJob: true,
     totalToCreate: parseInt(data.numListings) || 1,
     createdCount: 0,
-    assignedCount: 0,
-    batchSize: 5,
-    currentBatchTabs: [],
     listingsData: textData,
-    completedTabs: 0,
-    totalBatchesNeeded: 0,
-    currentBatchIndex: 0,
-    batchOpening: false,
     activeFillingTabId: null,
-    currentBatchCompletedTabs: [],
-    listingQueue: [],
-    currentQueueIndex: 0
+    currentListingIndex: 0
   };
   await saveState();
 
-  await startNextBatch();
+  // Content script reads full listing data (incl. images) + location
+  // rotation directly from "draftListing" + "customLocations" using the
+  // #idx= hash on each navigation — save it once here so it's always
+  // fresh, regardless of whether the user pressed "Store Details" first.
+  await chrome.storage.local.set({ draftListing: data });
+
+  await openListingTab(0);
 }
 
-async function startNextBatch() {
+// ============================================================
+// SEQUENTIAL SINGLE-TAB PROCESSING (Phase 1)
+// ------------------------------------------------------------
+// Only ONE tab is ever open for the whole job, and it is ALWAYS
+// the active/selected tab. Chrome's Page Lifecycle "freeze" only
+// hits tabs that stay BACKGROUNDED (not the selected tab) for
+// 5+ minutes. By reusing the same tab and just navigating its URL
+// for each listing (instead of opening several tabs and waiting
+// for a turn), no tab is ever backgrounded long enough to freeze —
+// so this works identically whether the user is watching or not.
+// ============================================================
+async function openListingTab(index) {
   if (!state.activeJob) return;
 
-  state.currentBatchTabs = [];
-  state.currentBatchCompletedTabs = [];
-  state.listingQueue = [];
-  state.currentQueueIndex = 0;
-  state.activeFillingTabId = null;
-  await saveState();
-
-  const remaining = state.totalToCreate - state.createdCount;
-  console.log(`[Lister Logs] [BG] startNextBatch called. Remaining listings: ${remaining}`);
-  if (remaining <= 0) {
+  if (index >= state.totalToCreate) {
     await finishPhase1();
     return;
   }
 
-  const batchCount = Math.min(state.batchSize, remaining);
-  const locations = await getLocationsList();
+  state.currentListingIndex = index;
+  await saveState();
 
   updateProgress(
-    `Opening batch of ${batchCount} tabs...`,
-    (state.createdCount / state.totalToCreate) * 100
+    `Creating listing ${index + 1}/${state.totalToCreate}...`,
+    (index / state.totalToCreate) * 100
   );
 
-  console.log(`[Lister Logs] [BG] Opening batch of ${batchCount} tabs. Total to create: ${state.totalToCreate}`);
-  for (let i = 0; i < batchCount; i++) {
-    if (!state.activeJob) return;
+  const url = `https://www.facebook.com/marketplace/create/item#idx=${index}`;
+  console.log(`[Lister Logs] [BG] Navigating to listing ${index}. Tab: ${state.activeFillingTabId || "(new)"}`);
 
-    const currentAssignedIndex = state.createdCount + i;
-    const locationIndex = currentAssignedIndex % locations.length;
-    const location = locations[locationIndex];
-
-    const listingPayload = {
-      ...state.listingsData,
-      location,
-      listingIndex: currentAssignedIndex
-    };
-
-    const isActive = (i === 0);
-    const tab = await chrome.tabs.create({
-      url: `https://www.facebook.com/marketplace/create/item#idx=${currentAssignedIndex}`,
-      active: isActive
-    });
-
-    state.currentBatchTabs.push(tab.id);
-    state.listingQueue.push(listingPayload);
-
-    if (isActive) {
-      state.activeFillingTabId = tab.id;
-      console.log(`[Lister Logs] [BG] Initial active filling tab set to: ${tab.id} (index 0)`);
-      try {
-        await chrome.windows.update(tab.windowId, { focused: true });
-      } catch (e) {}
+  if (state.activeFillingTabId) {
+    try {
+      await chrome.tabs.update(state.activeFillingTabId, { url, active: true });
+      const tabInfo = await chrome.tabs.get(state.activeFillingTabId);
+      try { await chrome.windows.update(tabInfo.windowId, { focused: true }); } catch (e) {}
+      return;
+    } catch (e) {
+      console.warn("[Lister Logs] [BG] Active tab is gone, opening a fresh one:", e.message);
+      state.activeFillingTabId = null;
     }
-
-    state.assignedCount++;
-    const key = `pendingAutofill_${tab.id}`;
-    await chrome.storage.local.set({ [key]: listingPayload });
-    runtimePendingData.set(tab.id, listingPayload);
-    await saveState();
-
-    await sleep(1500);
   }
+
+  const tab = await chrome.tabs.create({ url, active: true });
+  state.activeFillingTabId = tab.id;
+  await saveState();
+  try { await chrome.windows.update(tab.windowId, { focused: true }); } catch (e) {}
 }
 
 async function getLocationsList() {
@@ -269,79 +240,33 @@ async function getLocationsList() {
 async function handleDraftSaved(tabId) {
   if (!state.activeJob) return { close: true };
 
+  // Ignore stray messages from a tab that is no longer the one we're tracking
+  // (e.g. an old tab that hasn't fully unloaded yet).
+  if (tabId !== state.activeFillingTabId) {
+    console.log(`[Lister Logs] [BG] Ignoring DRAFT_SAVED from stale tab ${tabId} (expected ${state.activeFillingTabId})`);
+    return { close: false };
+  }
+
   state.createdCount++;
-  console.log(`[Lister Logs] [BG] Draft saved event from tab: ${tabId}. Total created so far: ${state.createdCount}/${state.totalToCreate}`);
-  
-  if (!state.currentBatchCompletedTabs) {
-    state.currentBatchCompletedTabs = [];
-  }
-  if (!state.currentBatchCompletedTabs.includes(tabId)) {
-    state.currentBatchCompletedTabs.push(tabId);
-  }
-  
+  console.log(`[Lister Logs] [BG] Draft saved. Total created: ${state.createdCount}/${state.totalToCreate}`);
   await saveState();
 
   updateProgress(
     `Draft saved: ${state.createdCount}/${state.totalToCreate}`,
     (state.createdCount / state.totalToCreate) * 100
   );
-  await chrome.storage.local.remove(`pendingAutofill_${tabId}`);
-  runtimePendingData.delete(tabId);
 
-  // Move to next tab index in queue
-  state.currentQueueIndex++;
-  await saveState();
-
-  if (state.currentQueueIndex < state.currentBatchTabs.length) {
-    // Switch focus to next tab
-    const nextTabId = state.currentBatchTabs[state.currentQueueIndex];
-    state.activeFillingTabId = nextTabId;
-    await saveState();
-
-    console.log(`[Lister Logs] [BG] Activating next tab in queue. Index: ${state.currentQueueIndex}, Tab ID: ${nextTabId}`);
-    try {
-      await chrome.tabs.update(nextTabId, { active: true });
-      const tabInfo = await chrome.tabs.get(nextTabId);
-      await chrome.windows.update(tabInfo.windowId, { focused: true });
-    } catch (e) {
-      console.error("[Lister Logs] [BG] Failed to activate next tab:", nextTabId, e);
-    }
-
-    // Send START_FILLING message to next tab
-    const nextKey = `pendingAutofill_${nextTabId}`;
-    chrome.storage.local.get([nextKey], (result) => {
-      const payload = result[nextKey];
-      if (payload) {
-        chrome.tabs.sendMessage(nextTabId, { action: "START_FILLING", data: payload }, () => {
-          if (chrome.runtime.lastError) {
-            console.log("[BG] Next tab not ready for message yet, it will load soon.");
-          }
-        });
-      }
-    });
-
-    return { stay: true };
-
-  } else {
-    // All tabs in this batch have finished! Close them.
-    for (const tId of state.currentBatchTabs) {
-      try { await chrome.tabs.remove(tId); } catch (e) {}
-    }
-    state.currentBatchTabs = [];
-    state.activeFillingTabId = null;
-    await saveState();
-
-    // Small delay to let tabs close cleanly
-    await sleep(2000);
-
-    if (state.createdCount < state.totalToCreate) {
-      await startNextBatch();
-      return { stay: true };
-    } else {
-      await finishPhase1();
-      return { close: true };
-    }
+  if (state.createdCount >= state.totalToCreate) {
+    await finishPhase1();
+    return { close: true };
   }
+
+  // Brief pause, then navigate the SAME tab to the next listing.
+  // The tab stays active/selected throughout — it never gets
+  // backgrounded, so it never hits Chrome's freeze threshold.
+  await sleep(1500);
+  await openListingTab(state.createdCount);
+  return { stay: true };
 }
 
 chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
@@ -350,78 +275,19 @@ chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
     state = { ...state, ...result.bulkState };
   }
 
-  if (state.activeJob && state.currentBatchTabs.includes(tabId)) {
-    console.log("[BG] Tab removed manually:", tabId);
-    const wasActiveFilling = (state.activeFillingTabId === tabId);
-    const index = state.currentBatchTabs.indexOf(tabId);
-
-    state.currentBatchTabs = state.currentBatchTabs.filter(id => id !== tabId);
-    if (state.currentBatchCompletedTabs) {
-      state.currentBatchCompletedTabs = state.currentBatchCompletedTabs.filter(id => id !== tabId);
-    }
-    runtimePendingData.delete(tabId);
-
-    if (wasActiveFilling && state.currentBatchTabs.length > 0) {
-      const nextIndex = Math.min(index, state.currentBatchTabs.length - 1);
-      state.currentQueueIndex = nextIndex;
-      const nextTabId = state.currentBatchTabs[nextIndex];
-      state.activeFillingTabId = nextTabId;
-      await saveState();
-
-      try {
-        await chrome.tabs.update(nextTabId, { active: true });
-        const tabInfo = await chrome.tabs.get(nextTabId);
-        await chrome.windows.update(tabInfo.windowId, { focused: true });
-        const nextKey = `pendingAutofill_${nextTabId}`;
-        chrome.storage.local.get([nextKey], (res) => {
-          if (res[nextKey]) {
-            chrome.tabs.sendMessage(nextTabId, { action: "START_FILLING", data: res[nextKey] }, () => {
-              if (chrome.runtime.lastError) {}
-            });
-          }
-        });
-      } catch (e) {}
-    }
-
-    // If tab was closed manually but we still need to create more listings, open a replacement tab!
-    if (state.assignedCount < state.totalToCreate) {
-      const locations = await getLocationsList();
-      const locationIndex = state.assignedCount % locations.length;
-      const location = locations[locationIndex];
-
-      const listingPayload = {
-        ...state.listingsData,
-        location,
-        listingIndex: state.assignedCount
-      };
-
-      const tab = await chrome.tabs.create({
-        url: "https://www.facebook.com/marketplace/create/item",
-        active: false
-      });
-
-      state.currentBatchTabs.push(tab.id);
-      state.listingQueue.push(listingPayload);
-      state.assignedCount++;
-      await saveState();
-
-      const key = `pendingAutofill_${tab.id}`;
-      await chrome.storage.local.set({ [key]: listingPayload });
-      runtimePendingData.set(tab.id, listingPayload);
-    } else {
-      await saveState();
-      if (state.currentBatchTabs.length === 0 || state.createdCount >= state.totalToCreate) {
-        await finishPhase1();
-      }
-    }
+  if (state.activeJob && state.activeFillingTabId === tabId) {
+    console.log("[BG] Active filling tab closed manually:", tabId, "— retrying listing", state.currentListingIndex, "in a fresh tab.");
+    state.activeFillingTabId = null;
+    await saveState();
+    await openListingTab(state.currentListingIndex);
   }
 });
 
 async function finishPhase1() {
   updateProgress("✅ All drafts created! Opening selling page to publish...", 100);
 
-  for (const tabId of state.currentBatchTabs) {
-    try { await chrome.tabs.remove(tabId); } catch (e) {}
+  if (state.activeFillingTabId) {
+    try { await chrome.tabs.remove(state.activeFillingTabId); } catch (e) {}
   }
 
   // Close any remaining create/item tabs
@@ -433,7 +299,7 @@ async function finishPhase1() {
   } catch (e) {}
 
   state.activeJob = false;
-  state.currentBatchTabs = [];
+  state.activeFillingTabId = null;
   await saveState();
 
   // Find existing selling page and reload it, or create a new one
@@ -459,15 +325,11 @@ async function finishPhase1() {
 
 async function stopBulkListing() {
   state.activeJob = false;
-  chrome.alarms.clear("batchTimeout");
 
-  for (const tabId of state.currentBatchTabs) {
-    try {
-      chrome.tabs.remove(tabId);
-      chrome.storage.local.remove(`pendingAutofill_${tabId}`);
-    } catch (e) {}
+  if (state.activeFillingTabId) {
+    try { chrome.tabs.remove(state.activeFillingTabId); } catch (e) {}
   }
-  state.currentBatchTabs = [];
+  state.activeFillingTabId = null;
   await saveState();
   updateProgress("Bulk listing stopped.", 0);
 }
