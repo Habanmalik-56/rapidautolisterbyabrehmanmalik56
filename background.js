@@ -197,6 +197,9 @@ async function startNextBatch() {
     if (isActive) {
       state.activeFillingTabId = tab.id;
       console.log(`[Lister Logs] [BG] Initial active filling tab set to: ${tab.id} (index 0)`);
+      try {
+        await chrome.windows.update(tab.windowId, { focused: true });
+      } catch (e) {}
     }
 
     state.assignedCount++;
@@ -252,6 +255,8 @@ async function handleDraftSaved(tabId) {
     console.log(`[Lister Logs] [BG] Activating next tab in queue. Index: ${state.currentQueueIndex}, Tab ID: ${nextTabId}`);
     try {
       await chrome.tabs.update(nextTabId, { active: true });
+      const tabInfo = await chrome.tabs.get(nextTabId);
+      await chrome.windows.update(tabInfo.windowId, { focused: true });
     } catch (e) {
       console.error("[Lister Logs] [BG] Failed to activate next tab:", nextTabId, e);
     }
@@ -319,6 +324,8 @@ chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
 
       try {
         await chrome.tabs.update(nextTabId, { active: true });
+        const tabInfo = await chrome.tabs.get(nextTabId);
+        await chrome.windows.update(tabInfo.windowId, { focused: true });
         const nextKey = `pendingAutofill_${nextTabId}`;
         chrome.storage.local.get([nextKey], (res) => {
           if (res[nextKey]) {

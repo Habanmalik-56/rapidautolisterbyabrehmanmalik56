@@ -70,6 +70,17 @@ function stopWatchdog() {
   console.log(`[Lister Watchdog] ✅ Watchdog stopped. Tab: ${_watchdogTabId}`);
 }
 
+// 🚀 VISIBILITY SPOOF: Trick React/Facebook into thinking this tab is always active.
+// Without this, background tabs freeze because React checks document.hidden / visibilityState
+// before rendering or processing events.
+try {
+  Object.defineProperty(document, 'visibilityState', { get: () => 'visible', configurable: true });
+  Object.defineProperty(document, 'hidden', { get: () => false, configurable: true });
+  console.log('[Lister] ✅ Visibility spoof active — tab will act as always visible.');
+} catch (e) {
+  console.warn('[Lister] Visibility spoof failed:', e);
+}
+
 // --- Background-safe sleep system ---
 // Sends a message to the background service worker to sleep, bypassing local tab throttling.
 function bgSleep(ms) {
