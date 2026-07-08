@@ -1267,12 +1267,8 @@ async function waitUntilReadyToFill() {
     await sleep(500);
   }
   
-  console.log("[Lister Logs] Checking document visibilityState...");
-  await ensureTabVisible();
-  
   console.log("[Lister Logs] Waiting for Marketplace form elements to render...");
-  for (let i = 0; i < 30; i++) {
-    await ensureTabVisible();
+  for (let i = 0; i < 40; i++) {
     const fileInput = document.querySelector('input[type="file"][multiple]') || document.querySelector('input[type="file"]');
     const titleInput = findFieldByLabel("Title", "input") || document.querySelector('input[type="text"][maxlength="100"]');
     if (fileInput || titleInput) {
@@ -1281,7 +1277,7 @@ async function waitUntilReadyToFill() {
     }
     await sleep(500);
   }
-  console.warn("[Lister Logs] Marketplace form elements not found after 15s, continuing anyway...");
+  console.warn("[Lister Logs] Marketplace form elements not found after 20s, continuing anyway...");
 }
 
 // ============================================================
@@ -1292,31 +1288,40 @@ async function init() {
   console.log("[INIT] Page:", url);
 
   if (url.includes("/marketplace/create/item")) {
-    const startFillingListener = async (message, sender, sendResponse) => {
+    // Each tab immediately reads its own pending data and starts filling in parallel.
+    // Retry a few times in case storage isn't ready instantly.
+    let retries = 0;
+    const tryFill = async () => {
+      chrome.runtime.sendMessage({ action: "GET_MY_PENDING_DATA" }, async (res) => {
+        if (res && res.data) {
+          console.log("[CONTENT] Got pending data — starting fill immediately...");
+          await waitUntilReadyToFill();
+          const storage = await chrome.storage.local.get("draftListing");
+          const images = (storage.draftListing && storage.draftListing.images) || [];
+          const fullData = { ...res.data, images };
+          runPhase1(fullData);
+        } else {
+          retries++;
+          if (retries < 20) {
+            console.log(`[INIT] No data yet, retry ${retries}/20 in 1s...`);
+            setTimeout(tryFill, 1000);
+          } else {
+            console.warn("[INIT] No pending data found after 20 retries. Tab may not have been assigned a listing.");
+          }
+        }
+      });
+    };
+    tryFill();
+
+    // Also listen for START_FILLING as a fallback (e.g. replacement tabs)
+    chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
       if (message.action === "START_FILLING" && message.data) {
-        chrome.runtime.onMessage.removeListener(startFillingListener);
-        console.log("[CONTENT] START_FILLING message received, starting verification checks...");
+        console.log("[CONTENT] START_FILLING message received as fallback...");
         await waitUntilReadyToFill();
         const storage = await chrome.storage.local.get("draftListing");
         const images = (storage.draftListing && storage.draftListing.images) || [];
         const fullData = { ...message.data, images };
         runPhase1(fullData);
-      }
-    };
-    chrome.runtime.onMessage.addListener(startFillingListener);
-
-    // Phase 1: autofill form
-    chrome.runtime.sendMessage({ action: "GET_MY_PENDING_DATA" }, async (res) => {
-      if (res && res.data) {
-        chrome.runtime.onMessage.removeListener(startFillingListener);
-        console.log("[CONTENT] GET_MY_PENDING_DATA returned data, starting verification checks...");
-        await waitUntilReadyToFill();
-        const storage = await chrome.storage.local.get("draftListing");
-        const images = (storage.draftListing && storage.draftListing.images) || [];
-        const fullData = { ...res.data, images };
-        runPhase1(fullData);
-      } else {
-        console.log("[INIT] Waiting for active focus / activation message to start filling...");
       }
     });
 

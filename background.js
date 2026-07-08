@@ -46,11 +46,7 @@ async function handleMessageAsync(message, sender, sendResponse) {
 
   } else if (message.action === "GET_MY_PENDING_DATA") {
     const tabId = sender.tab.id;
-    if (tabId !== state.activeFillingTabId) {
-      console.log(`[BG] GET_MY_PENDING_DATA from tab ${tabId} denied (not active filling tab: ${state.activeFillingTabId})`);
-      sendResponse({ data: null, status: "waiting_for_activation" });
-      return true;
-    }
+    // All tabs get their data immediately — parallel filling (no queue gate)
     const cached = runtimePendingData.get(tabId);
     if (cached) {
       sendResponse({ data: cached });
