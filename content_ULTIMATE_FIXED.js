@@ -1288,42 +1288,52 @@ async function init() {
   console.log("[INIT] Page:", url);
 
   if (url.includes("/marketplace/create/item")) {
-    // Each tab immediately reads its own pending data and starts filling in parallel.
-    // Retry a few times in case storage isn't ready instantly.
-    let retries = 0;
-    const tryFill = async () => {
+    const hash = window.location.hash;
+    const idxMatch = hash.match(/idx=(\d+)/);
+    
+    if (idxMatch) {
+      const listingIndex = parseInt(idxMatch[1]);
+      console.log(`[CONTENT] Found listingIndex ${listingIndex} in hash. Retrieving data from storage...`);
+      
+      chrome.storage.local.get(["draftListing", "customLocations"], async (res) => {
+        if (res.draftListing) {
+          const textData = { ...res.draftListing };
+          const images = textData.images || [];
+          
+          let locations = ["New York, NY"];
+          if (res.customLocations && Array.isArray(res.customLocations) && res.customLocations.length > 0) {
+            locations = res.customLocations;
+          }
+          const locationIndex = listingIndex % locations.length;
+          const location = locations[locationIndex];
+          
+          const fullData = {
+            ...textData,
+            location,
+            listingIndex,
+            images
+          };
+          
+          console.log("[CONTENT] Starting auto-fill immediately using hash index...");
+          await waitUntilReadyToFill();
+          runPhase1(fullData);
+        } else {
+          console.error("[CONTENT] No draftListing found in storage.");
+        }
+      });
+    } else {
+      // Fallback: GET_MY_PENDING_DATA in case it was opened without a hash index
       chrome.runtime.sendMessage({ action: "GET_MY_PENDING_DATA" }, async (res) => {
         if (res && res.data) {
-          console.log("[CONTENT] Got pending data — starting fill immediately...");
+          console.log("[CONTENT] Got pending data from background — starting fill...");
           await waitUntilReadyToFill();
           const storage = await chrome.storage.local.get("draftListing");
           const images = (storage.draftListing && storage.draftListing.images) || [];
           const fullData = { ...res.data, images };
           runPhase1(fullData);
-        } else {
-          retries++;
-          if (retries < 20) {
-            console.log(`[INIT] No data yet, retry ${retries}/20 in 1s...`);
-            setTimeout(tryFill, 1000);
-          } else {
-            console.warn("[INIT] No pending data found after 20 retries. Tab may not have been assigned a listing.");
-          }
         }
       });
-    };
-    tryFill();
-
-    // Also listen for START_FILLING as a fallback (e.g. replacement tabs)
-    chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
-      if (message.action === "START_FILLING" && message.data) {
-        console.log("[CONTENT] START_FILLING message received as fallback...");
-        await waitUntilReadyToFill();
-        const storage = await chrome.storage.local.get("draftListing");
-        const images = (storage.draftListing && storage.draftListing.images) || [];
-        const fullData = { ...message.data, images };
-        runPhase1(fullData);
-      }
-    });
+    }
 
   } else if (url.includes("/marketplace/create")) {
     // If we land on the choose listing page, but have pending data, redirect to /item

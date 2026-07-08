@@ -183,7 +183,7 @@ async function startNextBatch() {
 
     const isActive = (i === 0);
     const tab = await chrome.tabs.create({
-      url: "https://www.facebook.com/marketplace/create/item",
+      url: `https://www.facebook.com/marketplace/create/item#idx=${currentAssignedIndex}`,
       active: isActive
     });
 
