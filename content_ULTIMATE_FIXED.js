@@ -100,6 +100,32 @@ async function sleepVisible(ms) {
 
 const sleep = ms => bgSleep(ms);
 
+// Robust check to determine if an element is hidden style-wise or layout-wise,
+// handling cases where the tab is backgrounded or minimized.
+function isElementHidden(el) {
+  if (!el) return true;
+  // If the document/tab is active and visible, we can use the fast offsetParent & clientRect check
+  if (!document.hidden && document.visibilityState === "visible") {
+    if (el.offsetParent === null) return true;
+    const rect = el.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) return true;
+    return false;
+  }
+  // In background/minimized tabs, offsetParent is always null. We inspect CSS styles instead.
+  try {
+    let current = el;
+    while (current) {
+      if (current === document.body) break;
+      const style = window.getComputedStyle(current);
+      if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
+        return true;
+      }
+      current = current.parentElement;
+    }
+  } catch (e) {}
+  return false;
+}
+
 async function executeStep(stepName, stepFn) {
   await ensureTabVisible();
   setField(stepName);
@@ -207,9 +233,7 @@ async function selectDropdownOption(dropdownEl, optionText) {
     let allVisibleElements = [];
     for (const container of dropdownContainers) {
       const els = [...container.querySelectorAll('span, div, li, [role="option"]')].filter(el => {
-        if (el.offsetParent === null) return false;
-        const rect = el.getBoundingClientRect();
-        if (rect.width < 10 || rect.height < 5) return false;
+        if (isElementHidden(el)) return false;
         const txt = (el.innerText || el.textContent || "").trim().toLowerCase();
         return txt.length > 0 && txt.length < 80;
       });
@@ -479,7 +503,7 @@ async function findDropdownByPlaceholderText(keywords, timeoutMs = 8000) {
       ...document.querySelectorAll('[aria-haspopup="true"]'),
       ...document.querySelectorAll('div[tabindex="0"]'),
       ...document.querySelectorAll('select'),
-    ].filter(el => el.offsetParent !== null);
+    ].filter(el => !isElementHidden(el));
 
     for (const el of candidates) {
       const txt = (el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.innerText || el.textContent || '')
@@ -747,9 +771,7 @@ async function setLocation(location) {
       ...document.querySelectorAll('div[role="gridcell"]'),
       ...document.querySelectorAll('span, div')
     ].filter(el => {
-      if (el.offsetParent === null) return false;
-      const rect = el.getBoundingClientRect();
-      if (rect.width < 10 || rect.height < 5) return false;
+      if (isElementHidden(el)) return false;
       if (el.tagName === 'INPUT' || el.querySelector('input')) return false;
 
       const txt = (el.innerText || el.textContent || "").trim().toLowerCase();
@@ -1130,7 +1152,7 @@ async function runPublishActionInline() {
   const findBtn = (texts) => {
     return [...document.querySelectorAll('div[role="button"], button, span[role="button"]')]
       .find(el => {
-        if (el.offsetParent === null) return false;
+        if (isElementHidden(el)) return false;
         const txt = el.textContent.trim().toLowerCase();
         return texts.some(t => txt === t);
       });
