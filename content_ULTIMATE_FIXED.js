@@ -104,38 +104,6 @@ function ensureTabVisible() {
   return Promise.resolve();
 }
 
-// ============================================================
-// KEEP-ALIVE PORT — pings background.js every 15s so the
-// MV3 service worker never idles out (30s kill timer) while this
-// tab is running automation, even if the tab is not focused/visible.
-// ============================================================
-let _keepAlivePort = null;
-let _keepAliveInterval = null;
-
-function startKeepAlivePort() {
-  try {
-    _keepAlivePort = chrome.runtime.connect({ name: "listerKeepAlive" });
-    _keepAlivePort.onDisconnect.addListener(() => {
-      console.log("[KeepAlive] Port disconnected, reconnecting in 1s...");
-      _keepAlivePort = null;
-      setTimeout(startKeepAlivePort, 1000);
-    });
-    if (_keepAliveInterval) clearInterval(_keepAliveInterval);
-    _keepAliveInterval = setInterval(() => {
-      try {
-        if (_keepAlivePort) _keepAlivePort.postMessage({ ping: true, t: Date.now() });
-      } catch (e) {
-        // Port died (SW restarted) — reconnect
-        startKeepAlivePort();
-      }
-    }, 15000);
-    console.log("[KeepAlive] Port connected to background.");
-  } catch (e) {
-    console.warn("[KeepAlive] Failed to connect port:", e);
-  }
-}
-startKeepAlivePort();
-
 // Map sleepVisible and sleep to use the unthrottled background sleep
 async function sleepVisible(ms) {
   await bgSleep(ms);
@@ -147,14 +115,7 @@ const sleep = ms => bgSleep(ms);
 // handling cases where the tab is backgrounded or minimized.
 function isElementHidden(el) {
   if (!el) return true;
-  // If the document/tab is active and visible, we can use the fast offsetParent & clientRect check
-  if (!document.hidden && document.visibilityState === "visible") {
-    if (el.offsetParent === null) return true;
-    const rect = el.getBoundingClientRect();
-    if (rect.width === 0 && rect.height === 0) return true;
-    return false;
-  }
-  // In background/minimized tabs, offsetParent is always null. We inspect CSS styles instead.
+  if (!document.body.contains(el)) return true;
   try {
     let current = el;
     while (current) {
@@ -166,6 +127,8 @@ function isElementHidden(el) {
       current = current.parentElement;
     }
   } catch (e) {}
+  const rect = el.getBoundingClientRect();
+  if (rect.width === 0 && rect.height === 0) return true;
   return false;
 }
 
@@ -318,14 +281,14 @@ async function selectDropdownOption(dropdownEl, optionText) {
       }
 
       // Condition mappings
-      if (val === 'new' && (txt === 'nuevo' || txt === 'new')) { target = el; break; }
+      if (val === 'new' && (txt.includes('nuevo') || txt.includes('new'))) { target = el; break; }
       if (val === 'used - like new' && (txt.includes('como nuevo') || txt.includes('like new'))) { target = el; break; }
       if (val === 'used - very good' && (txt.includes('muy buen') || txt.includes('very good'))) { target = el; break; }
-      if (val === 'used - good' && (txt === 'good' || txt === 'buen estado' || txt === 'aceptable')) { target = el; break; }
-      if (val === 'used - fair' && (txt === 'fair' || txt === 'regular')) { target = el; break; }
+      if (val === 'used - good' && (txt.includes('good') || txt.includes('buen estado') || txt.includes('aceptable'))) { target = el; break; }
+      if (val === 'used - fair' && (txt.includes('fair') || txt.includes('regular'))) { target = el; break; }
 
       // Availability
-      if (val.includes('single') && (txt.includes('único') || txt === 'single')) { target = el; break; }
+      if (val.includes('single') && (txt.includes('único') || txt.includes('single'))) { target = el; break; }
       if (val.includes('stock') && (txt.includes('disponible') || txt.includes('stock'))) { target = el; break; }
     }
 
@@ -416,7 +379,7 @@ async function selectDropdownOption(dropdownEl, optionText) {
                            document.querySelector('div[style*="position: absolute"]') ||
                            document.querySelector('div[style*="position: fixed"]');
 
-      if (!dropdownOpen || dropdownOpen.offsetParent === null) {
+      if (!dropdownOpen || isElementHidden(dropdownOpen)) {
         console.log("[SELECT] SUCCESS - Dropdown closed");
         return true;
       }
