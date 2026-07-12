@@ -46,14 +46,14 @@ async function handleMessageAsync(message, sender, sendResponse) {
 
   } else if (message.action === "GET_MY_PENDING_DATA") {
     const tabId = sender.tab.id;
-    // All tabs get their data immediately — parallel filling (no queue gate)
+    const isActiveTab = (tabId === state.activeFillingTabId);
     const cached = runtimePendingData.get(tabId);
     if (cached) {
-      sendResponse({ data: cached });
+      sendResponse({ data: cached, isActiveTab });
     } else {
       const key = `pendingAutofill_${tabId}`;
       chrome.storage.local.get([key], (result) => {
-        sendResponse({ data: result[key] || null });
+        sendResponse({ data: result[key] || null, isActiveTab });
       });
     }
 

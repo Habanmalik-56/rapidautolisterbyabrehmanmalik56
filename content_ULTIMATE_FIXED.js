@@ -70,16 +70,11 @@ function stopWatchdog() {
   console.log(`[Lister Watchdog] ✅ Watchdog stopped. Tab: ${_watchdogTabId}`);
 }
 
-// 🚀 VISIBILITY SPOOF: Trick React/Facebook into thinking this tab is always active.
-// Without this, background tabs freeze because React checks document.hidden / visibilityState
-// before rendering or processing events.
-try {
-  Object.defineProperty(document, 'visibilityState', { get: () => 'visible', configurable: true });
-  Object.defineProperty(document, 'hidden', { get: () => false, configurable: true });
-  console.log('[Lister] ✅ Visibility spoof active — tab will act as always visible.');
-} catch (e) {
-  console.warn('[Lister] Visibility spoof failed:', e);
-}
+// NOTE: Visibility spoof intentionally removed.
+// It caused document.hidden to return false for ALL tabs (including background),
+// which broke background tab detection — every tab would try to fill immediately
+// instead of waiting for the background script to bring it to foreground.
+// Timer throttling is handled by bgSleep (via service worker) — no spoof needed.
 
 // --- Background-safe sleep system ---
 // Sends a message to the background service worker to sleep, bypassing local tab throttling.
@@ -1308,17 +1303,20 @@ async function init() {
       return true;
     });
 
-    // ── STEP 2: Check if already foreground — start immediately if so ────────
+    // ── STEP 2: Ask background if this tab is the active filling tab ──────────
+    // Use background's isActiveTab flag — document.hidden is unreliable since
+    // Facebook SPA can manipulate visibility state.
     chrome.runtime.sendMessage({ action: "GET_MY_PENDING_DATA" }, async (res) => {
       if (res && res.data) {
-        if (!document.hidden) {
-          console.log("[CONTENT] Tab is ACTIVE (foreground) — starting fill immediately.");
+        if (res.isActiveTab) {
+          console.log("[CONTENT] ✅ I am the ACTIVE tab — starting fill immediately.");
           startFill(res.data);
         } else {
-          console.log("[CONTENT] Tab is BACKGROUND — will wait for START_FILLING from background script.");
-          // Do NOT start filling — React has not rendered form elements yet.
-          // Background script will activate this tab after previous finishes,
-          // then send START_FILLING which will trigger startFill() above.
+          console.log("[CONTENT] 💤 I am a BACKGROUND tab — waiting for START_FILLING signal.");
+          // Background tabs wait here. The background script will:
+          // 1. Call chrome.tabs.update(this tab, {active:true}) after previous tab finishes
+          // 2. Wait 2.5s for React to render
+          // 3. Send START_FILLING which triggers startFill() via the listener above
         }
       } else {
         console.log("[CONTENT] No pending data — idle tab.");
