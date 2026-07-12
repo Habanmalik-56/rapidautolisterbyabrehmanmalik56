@@ -257,14 +257,20 @@ async function handleDraftSaved(tabId) {
       console.error("[Lister Logs] [BG] Failed to activate next tab:", nextTabId, e);
     }
 
+    // Wait for tab to come to foreground and React to render the form
+    // before sending START_FILLING (critical for background tab fix)
+    await sleep(2500);
+
     // Send START_FILLING message to next tab
     const nextKey = `pendingAutofill_${nextTabId}`;
     chrome.storage.local.get([nextKey], (result) => {
       const payload = result[nextKey];
       if (payload) {
-        chrome.tabs.sendMessage(nextTabId, { action: "START_FILLING", data: payload }, () => {
+        chrome.tabs.sendMessage(nextTabId, { action: "START_FILLING", data: payload }, (resp) => {
           if (chrome.runtime.lastError) {
-            console.log("[BG] Next tab not ready for message yet, it will load soon.");
+            console.warn("[BG] START_FILLING message failed:", chrome.runtime.lastError.message);
+          } else {
+            console.log("[BG] ✅ START_FILLING sent to tab", nextTabId);
           }
         });
       }

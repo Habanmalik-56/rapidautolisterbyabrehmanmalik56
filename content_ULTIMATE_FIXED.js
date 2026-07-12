@@ -1278,57 +1278,53 @@ async function waitUntilReadyToFill() {
 // ============================================================
 // MAIN INIT — runs on page load
 // ============================================================
+let _fillStarted = false; // Guard: prevent double-fill
+
+async function startFill(data) {
+  if (_fillStarted) return;
+  _fillStarted = true;
+  console.log("[CONTENT] startFill() — waiting for React to render form...");
+  await waitUntilReadyToFill();
+  const storage = await chrome.storage.local.get("draftListing");
+  const images = (storage.draftListing && storage.draftListing.images) || data.images || [];
+  runPhase1({ ...data, images });
+}
+
 async function init() {
   const url = window.location.href;
   console.log("[INIT] Page:", url);
 
   if (url.includes("/marketplace/create/item")) {
-    const hash = window.location.hash;
-    const idxMatch = hash.match(/idx=(\d+)/);
-    
-    if (idxMatch) {
-      const listingIndex = parseInt(idxMatch[1]);
-      console.log(`[CONTENT] Found listingIndex ${listingIndex} in hash. Retrieving data from storage...`);
-      
-      chrome.storage.local.get(["draftListing", "customLocations"], async (res) => {
-        if (res.draftListing) {
-          const textData = { ...res.draftListing };
-          const images = textData.images || [];
-          
-          let locations = ["New York, NY"];
-          if (res.customLocations && Array.isArray(res.customLocations) && res.customLocations.length > 0) {
-            locations = res.customLocations;
-          }
-          const locationIndex = listingIndex % locations.length;
-          const location = locations[locationIndex];
-          
-          const fullData = {
-            ...textData,
-            location,
-            listingIndex,
-            images
-          };
-          
-          console.log("[CONTENT] Starting auto-fill immediately using hash index...");
-          await waitUntilReadyToFill();
-          runPhase1(fullData);
+
+    // ── STEP 1: Always register START_FILLING listener ───────────────────────
+    // Background script sends this AFTER activating the tab to foreground.
+    // This is the ONLY way background tabs should start filling.
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (message.action === "START_FILLING" && message.data) {
+        console.log("[CONTENT] ✅ START_FILLING received — tab is now foreground. Starting fill.");
+        sendResponse({ status: "ok" });
+        startFill(message.data);
+      }
+      return true;
+    });
+
+    // ── STEP 2: Check if already foreground — start immediately if so ────────
+    chrome.runtime.sendMessage({ action: "GET_MY_PENDING_DATA" }, async (res) => {
+      if (res && res.data) {
+        if (!document.hidden) {
+          console.log("[CONTENT] Tab is ACTIVE (foreground) — starting fill immediately.");
+          startFill(res.data);
         } else {
-          console.error("[CONTENT] No draftListing found in storage.");
+          console.log("[CONTENT] Tab is BACKGROUND — will wait for START_FILLING from background script.");
+          // Do NOT start filling — React has not rendered form elements yet.
+          // Background script will activate this tab after previous finishes,
+          // then send START_FILLING which will trigger startFill() above.
         }
-      });
-    } else {
-      // Fallback: GET_MY_PENDING_DATA in case it was opened without a hash index
-      chrome.runtime.sendMessage({ action: "GET_MY_PENDING_DATA" }, async (res) => {
-        if (res && res.data) {
-          console.log("[CONTENT] Got pending data from background — starting fill...");
-          await waitUntilReadyToFill();
-          const storage = await chrome.storage.local.get("draftListing");
-          const images = (storage.draftListing && storage.draftListing.images) || [];
-          const fullData = { ...res.data, images };
-          runPhase1(fullData);
-        }
-      });
-    }
+      } else {
+        console.log("[CONTENT] No pending data — idle tab.");
+      }
+    });
+
 
   } else if (url.includes("/marketplace/create")) {
     // If we land on the choose listing page, but have pending data, redirect to /item
